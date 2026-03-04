@@ -14,7 +14,7 @@
 #include "bsp/esp-bsp.h"
 #include "bsp/display.h"
 #include "bsp_board_extra.h"
-
+#include "bsp/touch.h"
 #include "esp_brookesia.hpp"
 #include "app_examples/phone/squareline/src/phone_app_squareline.hpp"
 #include "apps.h"
@@ -44,7 +44,11 @@ extern int wifi_get_rssi(void);
 void battery_status_update_task(void *arg)
 {
     ESP_Brookesia_StatusBar *status_bar = (ESP_Brookesia_StatusBar *)arg;
-    if (status_bar == NULL) { vTaskDelete(NULL); return; }
+    if (status_bar == NULL)
+    {
+        vTaskDelete(NULL);
+        return;
+    }
 
     int percentuale = 0, voltage_mv = 0;
     bool in_carica = false;
@@ -73,14 +77,20 @@ void battery_status_update_task(void *arg)
 void wifi_status_update_task(void *arg)
 {
     ESP_Brookesia_StatusBar *status_bar = (ESP_Brookesia_StatusBar *)arg;
-    if (status_bar == NULL) { vTaskDelete(NULL); return; }
+    if (status_bar == NULL)
+    {
+        vTaskDelete(NULL);
+        return;
+    }
 
     while (1)
     {
         if (xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT)
         {
             int rssi = wifi_get_rssi();
-            int wifi_state = (rssi > -60) ? 3 : (rssi > -80) ? 2 : (rssi > -100) ? 1 : 0;
+            int wifi_state = (rssi > -60) ? 3 : (rssi > -80) ? 2
+                                            : (rssi > -100)  ? 1
+                                                             : 0;
             bsp_display_lock(0);
             status_bar->setWifiIconState(wifi_state);
             bsp_display_unlock();
@@ -99,7 +109,11 @@ void wifi_status_update_task(void *arg)
 void orario_server_update_task(void *arg)
 {
     ESP_Brookesia_StatusBar *status_bar = (ESP_Brookesia_StatusBar *)arg;
-    if (status_bar == NULL) { vTaskDelete(NULL); return; }
+    if (status_bar == NULL)
+    {
+        vTaskDelete(NULL);
+        return;
+    }
 
     int ore, minuti;
     while (1)
@@ -201,8 +215,8 @@ extern "C" void app_main(void)
     }
     else
     {
-        xTaskCreate(wifi_status_update_task,    "WiFi Status",    4096, status_bar, 1, NULL);
-        xTaskCreate(orario_server_update_task,  "Orario Server",  4096, status_bar, 1, NULL);
+        xTaskCreate(wifi_status_update_task, "WiFi Status", 4096, status_bar, 1, NULL);
+        xTaskCreate(orario_server_update_task, "Orario Server", 4096, status_bar, 1, NULL);
         xTaskCreate(battery_status_update_task, "Battery Status", 4096, status_bar, 1, NULL);
     }
 
@@ -237,6 +251,7 @@ extern "C" void app_main(void)
     banchetto->installApp(new Calculator());
     banchetto->installApp(new MiaApp());
     banchetto->installApp(new Logged());
+    banchetto->installApp(new DocBrowser());
 
     if (bsp_extra_player_init() != ESP_OK)
         ESP_LOGE(TAG, "⚠️ bsp_extra_player_init failed - audio non disponibile");
@@ -247,4 +262,6 @@ extern "C" void app_main(void)
     bsp_display_unlock();
     bsp_display_backlight_on();
     ESP_LOGI(TAG, "✓ Sistema avviato completamente");
+    // esp_lcd_touch_handle_t tp = bsp_touch_get_handle();
+    // ESP_LOGI(TAG, "Touch handle: %p", tp);
 }

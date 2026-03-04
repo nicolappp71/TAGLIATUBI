@@ -8,7 +8,7 @@ extern "C"
 }
 
 extern "C" {
-    extern const lv_img_dsc_t bar;
+    extern const lv_img_dsc_t scanner;
 }
 extern "C" void app_banchetto_update_page1(void);
 extern "C" void app_banchetto_update_page2(void);
@@ -27,7 +27,7 @@ extern "C" void app_assegna_banchetto_close(void)
 // ─────────────────────────────────────────────────────────
 // COSTRUTTORE / DISTRUTTORE
 // ─────────────────────────────────────────────────────────
-Logged::Logged() : ESP_Brookesia_PhoneApp("Associa Banchetto", &bar, true)
+Logged::Logged() : ESP_Brookesia_PhoneApp("Associa Banchetto", &scanner, true)
 {
 }
 

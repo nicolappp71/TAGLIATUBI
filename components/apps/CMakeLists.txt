@@ -26,6 +26,7 @@ idf_component_register(
     espressif__esp_lcd_touch_gt911
     esp_http_client
     esp_rom
+    json
     
     )
 

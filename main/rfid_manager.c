@@ -111,7 +111,7 @@ void init_rfid_uart(void)
     ESP_ERROR_CHECK(uart_set_pin(RFID_UART_NUM, RFID_TX_PIN, RFID_RX_PIN, 
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     
-    xTaskCreate(rfid_reader_task, "rfid_reader", 4096, NULL, 5, NULL);
+    xTaskCreate(rfid_reader_task, "rfid_reader", 8192, NULL, 5, NULL);
     
     ESP_LOGI(TAG_RFID, "✓ RFID Pronto (Len: %d, Debounce: %dms)", RFID_TAG_LEN, RFID_DEBOUNCE_MS);
 }

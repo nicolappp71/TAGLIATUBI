@@ -20,7 +20,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+esp_lcd_touch_handle_t bsp_touch_get_handle(void);
 /**
  * @brief BSP touch configuration structure
  *

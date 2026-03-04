@@ -17,6 +17,8 @@ static lv_obj_t *overlay = NULL;
 static lv_obj_t *popup = NULL;
 static lv_obj_t *display = NULL;
 static char input[MAX_DIGITS + 1] = {0};
+static lv_obj_t *form_overlay = NULL;
+static lv_obj_t *form_popup = NULL;
 
 // ─── Stato popup controllo ───────────────────────────────
 static lv_obj_t *ctrl_overlay = NULL;
@@ -433,4 +435,100 @@ static lv_obj_t *crea_tasto(lv_obj_t *parent, const char *label,
     if (cb)
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
     return btn;
+}
+// ─────────────────────────────────────────────────────────
+// POPUP FORMAZIONE (senza bottone OK — solo badge avanza)
+// ─────────────────────────────────────────────────────────
+
+// Variabili statiche — aggiungi in cima a tastiera.c vicino alle altre
+// static lv_obj_t *form_overlay = NULL;
+// static lv_obj_t *form_popup = NULL;
+
+// Se preferisci, incollale qui direttamente:
+
+
+static void form_annulla_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Formazione annullata");
+    banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
+    popup_formazione_close();
+}
+
+void popup_formazione_close(void)
+{
+    if (form_overlay)
+    {
+        lv_obj_del(form_overlay);
+        form_overlay = NULL;
+    }
+    if (form_popup)
+    {
+        lv_obj_del(form_popup);
+        form_popup = NULL;
+    }
+}
+
+void popup_formazione_open(const char *titolo, const char *msg)
+{
+    // Chiudi eventuale popup precedente
+    popup_formazione_close();
+
+    // Overlay bloccante
+    form_overlay = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(form_overlay, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(form_overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(form_overlay, 160, 0);
+    lv_obj_set_style_border_width(form_overlay, 0, 0);
+    lv_obj_set_style_radius(form_overlay, 0, 0);
+    lv_obj_clear_flag(form_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(form_overlay, LV_OBJ_FLAG_CLICKABLE);
+
+    // Popup
+    form_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(form_popup, 540, 300);
+    lv_obj_center(form_popup);
+    lv_obj_move_foreground(form_popup);
+    lv_obj_set_style_bg_color(form_popup, lv_color_hex(0x141E30), 0);
+    lv_obj_set_style_bg_opa(form_popup, 255, 0);
+    lv_obj_set_style_border_color(form_popup, lv_color_hex(0xF39C12), 0);
+    lv_obj_set_style_border_width(form_popup, 2, 0);
+    lv_obj_set_style_radius(form_popup, 12, 0);
+    lv_obj_set_style_pad_all(form_popup, 16, 0);
+    lv_obj_clear_flag(form_popup, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_shadow_width(form_popup, 30, 0);
+    lv_obj_set_style_shadow_color(form_popup, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(form_popup, 200, 0);
+
+    // Titolo
+    lv_obj_t *tit = lv_label_create(form_popup);
+    lv_label_set_text(tit, titolo);
+    lv_obj_set_style_text_font(tit, &lv_font_montserrat_30, 0);
+    lv_obj_set_style_text_color(tit, lv_color_hex(0xF39C12), 0);
+    lv_obj_set_width(tit, LV_PCT(100));
+    lv_obj_set_style_text_align(tit, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(tit, LV_ALIGN_TOP_MID, 0, 0);
+
+    // Messaggio
+    lv_obj_t *lbl = lv_label_create(form_popup);
+    lv_label_set_text(lbl, msg);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -10);
+
+    // Bottone Annulla
+    lv_obj_t *btn = lv_btn_create(form_popup);
+    lv_obj_set_size(btn, 160, 50);
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0xFA0000), 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_add_event_cb(btn, form_annulla_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *btn_lbl = lv_label_create(btn);
+    lv_label_set_text(btn_lbl, "Annulla");
+    lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(btn_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(btn_lbl);
 }

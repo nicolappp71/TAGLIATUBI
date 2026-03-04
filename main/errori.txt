@@ -1,0 +1,17 @@
+Guru Meditation Error: Core  1 panic'ed (Stack protection fault). 
+
+Detected in task "rfid_reader" at 0x4ff1257a
+--- 0x4ff1257a: xQueueSemaphoreTake at C:/Espressif/frameworks/esp-idf-v5.5.2/components/freertos/FreeRTOS-Kernel/queue.c:1699
+Stack pointer: 0x4ff4b640
+Stack bounds: 0x4ff4b66c - 0x4ff4c660
+
+
+Core  1 register dump:
+MEPC    : 0x4ff1258a  RA      : 0x4ff126f0  SP      : 0x4ff4b640  GP      : 0x4ff1da00
+--- 0x4ff1258a: xQueueSemaphoreTake at C:/Espressif/frameworks/esp-idf-v5.5.2/components/freertos/FreeRTOS-Kernel/queue.c:1709
+--- 0x4ff126f0: xQueueTakeMutexRecursive at C:/Espressif/frameworks/esp-idf-v5.5.2/components/freertos/FreeRTOS-Kernel/queue.c:840
+TP      : 0x4ff4c5d0  T0      : 0x4808a484  T1      : 0x0000000e  T2      : 0x00000009
+--- 0x4808a484: lv_anim_init at C:/Users/npuppo/Documents/IDF-projects/MULTI_ORDINI_SEMI/managed_components/lvgl__lvgl/src/misc/lv_anim.c:71
+S0/FP   : 0x4ff29d74  S1      : 0xffffffff  A0      : 0x4ff29d74  A1      : 0xffffffff
+A2      : 0x00000004  A3      : 0x7f000000  A4      : 0x00000004  A5      : 0x1f000000
+A6      : 0x4ff210e0  A7      : 0x000005dc  S2      : 0x00000000  S3      : 0xffffffff

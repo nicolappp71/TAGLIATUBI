@@ -23,6 +23,8 @@ extern void app_banchetto_update_page1(void);
 extern void app_banchetto_update_page2(void);
 extern void app_assegna_banchetto_close(void);
 
+static char s_formazione_cod_art[32] = {0}; // codice articolo mancante formazione
+static char s_formazione_badge[64] = {0};
 static const char *TAG = "BANCHETTO_MGR";
 
 #define SERVER_URL SERVER_BASE "/iot/banchetti_1_9_4.php"
@@ -689,16 +691,137 @@ void banchetto_manager_set_barcode(const char *barcode)
         web_server_broadcast_update();
     }
 }
+// esp_err_t banchetto_manager_login_badge(const char *badge)
+// {
+//     if (!badge || strlen(badge) == 0)
+//         return ESP_FAIL;
+
+//     switch (s_state)
+//     {
+//     case BANCHETTO_STATE_CONTROLLO:
+//         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
+//         return banchetto_manager_controllo(badge);
+//     default:
+//         break;
+//     }
+
+//     ESP_LOGI(TAG, "Badge: %s", badge);
+
+//     char url[256];
+//     snprintf(url, sizeof(url), "%s?key=%s&comando=badge&badge=%s",
+//              SERVER_URL, device_key, badge);
+
+//     int response_code = 0;
+//     char *response_body = NULL;
+//     esp_err_t ret = http_get_request(url, &response_code, &response_body);
+
+//     if (ret != ESP_OK || response_code != 200)
+//     {
+//         ESP_LOGE(TAG, "Errore HTTP: %s (code: %d)", esp_err_to_name(ret), response_code);
+//         if (response_body)
+//             free(response_body);
+//         return ESP_FAIL;
+//     }
+
+//     badge_response_t badge_resp;
+//     if (parse_badge_response(response_body, &badge_resp) != ESP_OK)
+//     {
+//         ESP_LOGE(TAG, "Errore parsing risposta badge");
+//         if (response_body)
+//             free(response_body);
+//         return ESP_FAIL;
+//     }
+//     free(response_body);
+
+//     // ── LOGOUT ───────────────────────────────────────────────
+//     if (badge_resp.matricola == 0)
+//     {
+//         if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+//         {
+//             for (int i = 0; i < s_list.count; i++)
+//             {
+//                 s_list.items[i].sessione_aperta = false;
+//                 s_list.items[i].operatore[0] = '\0';
+//                 s_list.items[i].matricola[0] = '\0';
+//                 s_list.items[i].qta_prod_sessione = 0;
+//             }
+//             xSemaphoreGive(data_mutex);
+//             banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
+//             ESP_LOGI(TAG, "Sessione CHIUSA");
+//             myBeep();
+//             if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+//             {
+//                 app_banchetto_update_page1();
+//                 app_banchetto_update_page2();
+//                 lvgl_port_unlock();
+//             }
+//             web_server_broadcast_update();
+//             return ESP_OK;
+//         }
+//         return ESP_FAIL;
+//     }
+
+//     if (!badge_resp.success)
+//     {
+//         ESP_LOGE(TAG, "Login FALLITO: %s", badge_resp.errore);
+//         myBeep();
+//         vTaskDelay(pdMS_TO_TICKS(200));
+//         myBeep();
+//         return ESP_FAIL;
+//     }
+
+//     // ── LOGIN ────────────────────────────────────────────────
+//     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+//     {
+//         for (int i = 0; i < s_list.count; i++)
+//         {
+//             snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore),
+//                      "%s", badge_resp.operatore);
+//             snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola),
+//                      "%d", badge_resp.matricola);
+//             s_list.items[i].sessione_aperta = true;
+//             s_list.items[i].qta_prod_sessione = 0;
+//         }
+//         xSemaphoreGive(data_mutex);
+//         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
+//         ESP_LOGI(TAG, "Login OK — Operatore: %s mat:%s",
+//                  badge_resp.operatore, s_list.items[0].matricola);
+//         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+//         {
+//             app_banchetto_update_page1();
+//             app_banchetto_update_page2();
+//             lvgl_port_unlock();
+//         }
+//         myBeep();
+//         web_server_broadcast_update();
+//         return ESP_OK;
+//     }
+//     return ESP_FAIL;
+// }
+
+// ═══════════════════════════════════════════════════════════
+// CONTROLLO
+// ═══════════════════════════════════════════════════════════
+
 esp_err_t banchetto_manager_login_badge(const char *badge)
 {
     if (!badge || strlen(badge) == 0)
         return ESP_FAIL;
+
+    ESP_LOGW(TAG, "login_badge — stato attuale: %d", s_state);
 
     switch (s_state)
     {
     case BANCHETTO_STATE_CONTROLLO:
         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
         return banchetto_manager_controllo(badge);
+
+    case BANCHETTO_STATE_ATTESA_FORMATORE:
+        return banchetto_manager_formazione_formatore(badge);
+
+    case BANCHETTO_STATE_ATTESA_CONFERMA_FORMAZIONE:
+        return banchetto_manager_formazione_accettazione(badge);
+
     default:
         break;
     }
@@ -729,9 +852,56 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
             free(response_body);
         return ESP_FAIL;
     }
+
+    // ── FORMAZIONE MANCANTE ──────────────────────────────
+    if (badge_resp.formazione == 999)
+    {
+        ESP_LOGW(TAG, "Operatore %d: formazione mancante", badge_resp.matricola);
+
+        // Recupera cod_art dalla risposta JSON per mostrarlo nel popup
+        cJSON *json = cJSON_Parse(response_body);
+        if (json)
+        {
+            cJSON *cod = cJSON_GetObjectItem(json, "cod_art");
+            if (cod && cJSON_IsString(cod) && cod->valuestring)
+            {
+                strncpy(s_formazione_cod_art, cod->valuestring, sizeof(s_formazione_cod_art) - 1);
+                s_formazione_cod_art[sizeof(s_formazione_cod_art) - 1] = '\0';
+            }
+            else
+            {
+                strncpy(s_formazione_cod_art, "sconosciuto", sizeof(s_formazione_cod_art) - 1);
+            }
+            cJSON_Delete(json);
+        }
+        free(response_body);
+
+        // Salva badge operatore per riutilizzarlo al passo 3
+        strncpy(s_formazione_badge, badge, sizeof(s_formazione_badge) - 1);
+        s_formazione_badge[sizeof(s_formazione_badge) - 1] = '\0';
+
+        banchetto_manager_set_state(BANCHETTO_STATE_ATTESA_FORMATORE);
+
+        // Apri popup formazione (va chiamato con LVGL lock)
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "Non hai la formazione\nsul codice %s.\nChiama il responsabile.",
+                     s_formazione_cod_art);
+            popup_formazione_open("Formazione mancante", msg);
+            lvgl_port_unlock();
+        }
+
+        myBeep();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        myBeep();
+        return ESP_FAIL;
+    }
+
     free(response_body);
 
-    // ── LOGOUT ───────────────────────────────────────────────
+    // ── LOGOUT ───────────────────────────────────────────
     if (badge_resp.matricola == 0)
     {
         if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
@@ -768,7 +938,7 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
         return ESP_FAIL;
     }
 
-    // ── LOGIN ────────────────────────────────────────────────
+    // ── LOGIN ────────────────────────────────────────────
     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
     {
         for (int i = 0; i < s_list.count; i++)
@@ -798,9 +968,171 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
 }
 
 // ═══════════════════════════════════════════════════════════
-// CONTROLLO
+// FORMAZIONE FORMATORE — Step 2: badge del formatore
 // ═══════════════════════════════════════════════════════════
 
+esp_err_t banchetto_manager_formazione_formatore(const char *badge)
+{
+    if (!badge || strlen(badge) == 0)
+        return ESP_ERR_INVALID_ARG;
+
+    ESP_LOGI(TAG, "Formazione formatore — badge: %s", badge);
+
+    char url[256];
+    snprintf(url, sizeof(url), "%s?key=%s&comando=formazione_formatore&badge=%s",
+             SERVER_URL, device_key, badge);
+
+    int response_code = 0;
+    char *body = NULL;
+    esp_err_t ret = http_get_request(url, &response_code, &body);
+
+    if (ret != ESP_OK || response_code != 200)
+    {
+        ESP_LOGE(TAG, "Errore HTTP formazione formatore (code: %d)", response_code);
+        if (body)
+            free(body);
+        return ESP_FAIL;
+    }
+
+    // Parsa risposta
+    bool ok = false;
+    char msg_errore[64] = {0};
+
+    cJSON *json = cJSON_Parse(body ? body : "");
+    if (json)
+    {
+        cJSON *risp = cJSON_GetObjectItem(json, "risposta");
+        if (risp && cJSON_IsString(risp) && risp->valuestring)
+        {
+            if (strcmp(risp->valuestring, "Ok del formatore") == 0)
+            {
+                ok = true;
+            }
+            else
+            {
+                strncpy(msg_errore, risp->valuestring, sizeof(msg_errore) - 1);
+            }
+        }
+        cJSON_Delete(json);
+    }
+    if (body)
+        free(body);
+
+    if (ok)
+    {
+        // Formatore validato — passa a step 3
+        banchetto_manager_set_state(BANCHETTO_STATE_ATTESA_CONFERMA_FORMAZIONE);
+        ESP_LOGI(TAG, "Formatore OK — attesa conferma operatore");
+
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
+            popup_formazione_close();
+            popup_formazione_open(
+                "Conferma formazione",
+                "Dichiaro di avere ricevuto\nla formazione necessaria.\nConferma tramite badge.");
+            lvgl_port_unlock();
+        }
+        myBeep();
+        return ESP_OK;
+    }
+    else
+    {
+        // Non è un formatore — resta in attesa
+        ESP_LOGW(TAG, "Badge non valido come formatore: %s", msg_errore);
+
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
+            popup_avviso_open("Non sei un formatore",
+                              strlen(msg_errore) > 0 ? msg_errore : "Badge non riconosciuto\ncome formatore.");
+            lvgl_port_unlock();
+        }
+        myBeep();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        myBeep();
+        return ESP_FAIL;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FORMAZIONE ACCETTAZIONE — Step 3: badge operatore conferma
+// ═══════════════════════════════════════════════════════════
+
+esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
+{
+    if (!badge || strlen(badge) == 0)
+        return ESP_ERR_INVALID_ARG;
+
+    ESP_LOGI(TAG, "Formazione accettazione — badge: %s", badge);
+
+    char url[256];
+    snprintf(url, sizeof(url), "%s?key=%s&comando=formazione_accettazione&badge=%s",
+             SERVER_URL, device_key, badge);
+
+    int response_code = 0;
+    char *body = NULL;
+    esp_err_t ret = http_get_request(url, &response_code, &body);
+
+    if (ret != ESP_OK || response_code != 200)
+    {
+        ESP_LOGE(TAG, "Errore HTTP formazione accettazione (code: %d)", response_code);
+        if (body)
+            free(body);
+        return ESP_FAIL;
+    }
+
+    bool ok = false;
+    char msg_errore[64] = {0};
+
+    cJSON *json = cJSON_Parse(body ? body : "");
+    if (json)
+    {
+        cJSON *risp = cJSON_GetObjectItem(json, "risposta");
+        if (risp && cJSON_IsString(risp) && risp->valuestring)
+        {
+            if (strcmp(risp->valuestring, "Formazione registrata") == 0)
+            {
+                ok = true;
+            }
+            else
+            {
+                strncpy(msg_errore, risp->valuestring, sizeof(msg_errore) - 1);
+            }
+        }
+        cJSON_Delete(json);
+    }
+    if (body)
+        free(body);
+
+    if (ok)
+    {
+        ESP_LOGI(TAG, "Formazione registrata — procedo con login");
+
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
+            popup_formazione_close();
+            lvgl_port_unlock();
+        }
+
+        // Ripeti il login con il badge originale dell'operatore
+        banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
+        return banchetto_manager_login_badge(s_formazione_badge);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Formazione non accettata: %s", msg_errore);
+
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
+            popup_avviso_open("Errore formazione",
+                              strlen(msg_errore) > 0 ? msg_errore : "Formazione non registrata.");
+            lvgl_port_unlock();
+        }
+        myBeep();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        myBeep();
+        return ESP_FAIL;
+    }
+}
 esp_err_t banchetto_manager_controllo(const char *badge)
 {
     if (!badge || strlen(badge) == 0)

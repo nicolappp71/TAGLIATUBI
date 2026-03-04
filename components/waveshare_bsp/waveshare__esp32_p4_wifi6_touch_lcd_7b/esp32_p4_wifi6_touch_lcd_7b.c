@@ -28,7 +28,7 @@
 #include "esp_codec_dev_defaults.h"
 
 static const char *TAG = "ESP32_P4_EV";
-
+static esp_lcd_touch_handle_t s_touch_handle = NULL;
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
 static lv_indev_t *disp_indev = NULL;
 #endif // (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
@@ -596,6 +596,7 @@ static lv_indev_t *bsp_display_indev_init(lv_display_t *disp)
     esp_lcd_touch_handle_t tp;
     BSP_ERROR_CHECK_RETURN_NULL(bsp_touch_new(NULL, &tp));
     assert(tp);
+    s_touch_handle = tp;
 
     /* Add touch input (for selected screen) */
     const lvgl_port_touch_cfg_t touch_cfg = {
@@ -712,3 +713,4 @@ esp_err_t bsp_usb_host_stop(void)
     }
     return ESP_OK;
 }
+bsp_touch_get_handle() bsp_touch_get_handle(void):

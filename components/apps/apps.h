@@ -9,3 +9,4 @@
 #include "mia_app/MiaApp.hpp"
 #include "app_banchetto/AppBanchetto.hpp"
 #include "logged/Logged.hpp"
+#include "doc_browser/DocBrowser.hpp"
