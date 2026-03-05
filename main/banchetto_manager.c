@@ -22,6 +22,8 @@
 extern void app_banchetto_update_page1(void);
 extern void app_banchetto_update_page2(void);
 extern void app_assegna_banchetto_close(void);
+extern void deep_sleep_reset_timer(void);
+
 
 static char s_formazione_cod_art[32] = {0}; // codice articolo mancante formazione
 static char s_formazione_badge[64] = {0};
@@ -462,9 +464,11 @@ bool banchetto_manager_versa(uint32_t qta)
 
             lvgl_port_unlock();
         }
+        deep_sleep_reset_timer();
         myBeep();
         visual_feedback_ok();
         web_server_broadcast_update();
+
     }
 
     return all_ok;

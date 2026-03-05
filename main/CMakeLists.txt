@@ -13,6 +13,7 @@ idf_component_register(
     "scanner_manager.c"
     "battery_manager.c"
     "log_manager.c"
+    "ble_manager.c"
     INCLUDE_DIRS "."
     REQUIRES 
         espressif__esp_hosted 
