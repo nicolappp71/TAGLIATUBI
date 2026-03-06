@@ -37,6 +37,7 @@ extern "C"
 #include "battery_manager.h"
 #include "log_manager.h"
 #include "ble_manager.h"
+#include "ota_manager.h"
 }
 
 static const char *TAG = "MAIN";
@@ -127,7 +128,6 @@ void backlight_auto_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
-
 // --- TASK BATTERIA ---
 void battery_status_update_task(void *arg)
 {
@@ -143,6 +143,12 @@ void battery_status_update_task(void *arg)
 
     while (1)
     {
+        if (ota_in_progress)
+        {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
         if (battery_get_percentage(&percentuale) == ESP_OK)
         {
             battery_get_voltage(&voltage_mv);
@@ -173,6 +179,12 @@ void wifi_status_update_task(void *arg)
 
     while (1)
     {
+        if (ota_in_progress)
+        {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
         if (xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT)
         {
             int rssi = wifi_get_rssi();
@@ -206,6 +218,12 @@ void orario_server_update_task(void *arg)
     int ore, minuti;
     while (1)
     {
+        if (ota_in_progress)
+        {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
         if (xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT)
         {
             if (http_get_server_time(&ore, &minuti) == ESP_OK)
@@ -219,6 +237,7 @@ void orario_server_update_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(60000));
     }
 }
+// --- TASK BATTERIA ---
 
 void inizializza_testi_gui()
 {
@@ -359,5 +378,6 @@ extern "C" void app_main(void)
 
     bsp_display_unlock();
     bsp_display_backlight_on();
+
     ESP_LOGI(TAG, "Sistema avviato completamente");
 }

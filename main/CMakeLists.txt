@@ -14,6 +14,7 @@ idf_component_register(
     "battery_manager.c"
     "log_manager.c"
     "ble_manager.c"
+    "ota_manager.c"
     INCLUDE_DIRS "."
     REQUIRES 
         espressif__esp_hosted 
@@ -38,6 +39,11 @@ idf_component_register(
         usb_host_hid
         driver esp_adc
         bt
+        app_update    # <--- AGGIUNGI QUESTO (è quello che contiene esp_ota_ops.h)
+        esp_https_ota 
+        esp_http_client
+        
+
 )
 
 # Questa riga dice al compilatore di ignorare i warning sui campi mancanti in main.cpp
