@@ -80,6 +80,9 @@ LV_IMG_DECLARE(esp_brookesia_image_large_status_bar_wifi_level2_36_36);
 LV_IMG_DECLARE(esp_brookesia_image_large_status_bar_wifi_level3_36_36);
 LV_IMG_DECLARE(esp_brookesia_image_large_wallpaper_dark_720_720);
 
+// Icona Custom BLE
+LV_IMG_DECLARE(BLE);
+
 #ifdef __cplusplus
 }
 #endif

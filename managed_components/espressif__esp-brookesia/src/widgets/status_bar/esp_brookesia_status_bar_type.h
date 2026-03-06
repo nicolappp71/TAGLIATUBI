@@ -63,6 +63,14 @@ typedef struct {
     } wifi;
     struct {
         uint8_t area_index;
+        ESP_Brookesia_StatusBarIconData_t icon_data;
+    } ble;
+    struct {
+        uint8_t area_index;
+        ESP_Brookesia_StatusBarIconData_t icon_data;
+    } sd; // <--- AGGIUNTO SD
+    struct {
+        uint8_t area_index;
     } clock;
     struct {
         uint8_t enable_main_size_min: 1;
@@ -72,6 +80,10 @@ typedef struct {
         uint32_t enable_battery_label: 1;
         uint32_t enable_wifi_icon: 1;
         uint32_t enable_wifi_icon_common_size: 1;
+        uint32_t enable_ble_icon: 1; 
+        uint32_t enable_ble_icon_common_size: 1; 
+        uint32_t enable_sd_icon: 1; // <--- AGGIUNTO ENABLE SD
+        uint32_t enable_sd_icon_common_size: 1; // <--- AGGIUNTO COMMON SIZE SD
         uint32_t enable_clock: 1;
     } flags;
 } ESP_Brookesia_StatusBarData_t;

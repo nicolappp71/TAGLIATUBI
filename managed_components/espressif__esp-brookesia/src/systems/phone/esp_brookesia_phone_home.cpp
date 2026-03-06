@@ -13,6 +13,30 @@
 
 using namespace std;
 
+// Puntatori globali per permettere alle funzioni C di accedere alla status bar
+ESP_Brookesia_StatusBar* g_ble_status_bar = nullptr;
+ESP_Brookesia_StatusBar* g_sd_status_bar = nullptr;
+
+extern "C" void ui_update_ble_status(bool connected) {
+    if (g_ble_status_bar) {
+        if (connected) {
+            g_ble_status_bar->showBleIcon();
+        } else {
+            g_ble_status_bar->hideBleIcon();
+        }
+    }
+}
+
+extern "C" void ui_update_sd_status(bool inserted) {
+    if (g_sd_status_bar) {
+        if (inserted) {
+            g_sd_status_bar->showSdIcon();
+        } else {
+            g_sd_status_bar->hideSdIcon();
+        }
+    }
+}
+
 ESP_Brookesia_PhoneHome::ESP_Brookesia_PhoneHome(ESP_Brookesia_Core &core, const ESP_Brookesia_PhoneHomeData_t &data):
     ESP_Brookesia_CoreHome(core, core.getCoreData().home),
     _data(data),
@@ -51,12 +75,20 @@ bool ESP_Brookesia_PhoneHome::begin(void)
 
     // Status bar
     if (_data.flags.enable_status_bar) {
-        status_bar = std::make_shared<ESP_Brookesia_StatusBar>(_core, _data.status_bar.data,
-                     _core.getCoreManager().getAppFreeId(), _core.getCoreManager().getAppFreeId());
+       status_bar = std::make_shared<ESP_Brookesia_StatusBar>(_core, _data.status_bar.data,
+                     _core.getCoreManager().getAppFreeId(), 
+                     _core.getCoreManager().getAppFreeId(), 
+                     _core.getCoreManager().getAppFreeId(),
+                     _core.getCoreManager().getAppFreeId()); 
+
         ESP_BROOKESIA_CHECK_NULL_RETURN(status_bar, false, "Create status bar failed");
         ESP_BROOKESIA_CHECK_FALSE_RETURN(status_bar->begin(system_screen_obj), false, "Begin status bar failed");
         ESP_BROOKESIA_CHECK_FALSE_RETURN(status_bar->setVisualMode(_data.status_bar.visual_mode), false,
                                          "Status bar set visual mode failed");
+                                         
+        // Assegna i puntatori globali
+        g_ble_status_bar = status_bar.get();
+        g_sd_status_bar = status_bar.get();
     }
 
     // Navigation bar
@@ -88,6 +120,8 @@ bool ESP_Brookesia_PhoneHome::del(void)
 
     if (_status_bar) {
         _status_bar.reset();
+        g_ble_status_bar = nullptr; 
+        g_sd_status_bar = nullptr;
     }
     if (_navigation_bar) {
         _navigation_bar.reset();

@@ -16,16 +16,18 @@
 using namespace std;
 
 ESP_Brookesia_StatusBar::ESP_Brookesia_StatusBar(const ESP_Brookesia_Core &core, const ESP_Brookesia_StatusBarData_t &data, int battery_id,
-        int wifi_id):
+        int wifi_id, int ble_id, int sd_id):
     _core(core),
     _data(data),
     _main_obj(nullptr),
     _battery_id(battery_id),
+    _wifi_id(wifi_id),
+    _ble_id(ble_id),
+    _sd_id(sd_id),
     _is_battery_initialed(false),
     _battery_state(-1),
     _is_battery_lable_out_of_area(false),
     _battery_label(nullptr),
-    _wifi_id(wifi_id),
     _clock_hour(-1),
     _clock_min(-1),
     _is_clock_out_of_area(false),
@@ -53,6 +55,8 @@ bool ESP_Brookesia_StatusBar::begin(lv_obj_t *parent)
 
     ESP_BROOKESIA_CHECK_FALSE_GOTO(beginMain(parent), err, "Begin main failed");
     ESP_BROOKESIA_CHECK_FALSE_GOTO(beginWifi(), err, "Begin wifi failed");
+    ESP_BROOKESIA_CHECK_FALSE_GOTO(beginBle(), err, "Begin ble failed");
+    ESP_BROOKESIA_CHECK_FALSE_GOTO(beginSd(), err, "Begin sd failed");
     ESP_BROOKESIA_CHECK_FALSE_GOTO(beginBattery(), err, "Begin battery failed");
     ESP_BROOKESIA_CHECK_FALSE_GOTO(beginClock(), err, "Begin clock failed");
 
@@ -264,6 +268,24 @@ bool ESP_Brookesia_StatusBar::calibrateData(const ESP_Brookesia_StyleSize_t &scr
         }
         ESP_BROOKESIA_CHECK_FALSE_RETURN(calibrateIconData(data, home, data.wifi.icon_data), false,
                                          "Calibrate wifi icon data failed");
+    }
+    // Ble
+    if (data.flags.enable_ble_icon) {
+        ESP_BROOKESIA_LOGD("Calibrate ble icon data");
+        if (data.flags.enable_ble_icon_common_size) {
+            data.ble.icon_data.size = data.icon_common_size;
+        }
+        ESP_BROOKESIA_CHECK_FALSE_RETURN(calibrateIconData(data, home, data.ble.icon_data), false,
+                                         "Calibrate ble icon data failed");
+    }
+    // Sd
+    if (data.flags.enable_sd_icon) {
+        ESP_BROOKESIA_LOGD("Calibrate sd icon data");
+        if (data.flags.enable_sd_icon_common_size) {
+            data.sd.icon_data.size = data.icon_common_size;
+        }
+        ESP_BROOKESIA_CHECK_FALSE_RETURN(calibrateIconData(data, home, data.sd.icon_data), false,
+                                         "Calibrate sd icon data failed");
     }
 
     return true;
@@ -518,9 +540,11 @@ bool ESP_Brookesia_StatusBar::beginWifi(void)
 {
     ESP_BROOKESIA_LOGD("Begin wifi(0x%p)", this);
 
-    ESP_BROOKESIA_CHECK_FALSE_RETURN(addIcon(_data.wifi.icon_data, _data.wifi.area_index, _wifi_id), false,
-                                     "Add wifi icon failed");
-    ESP_BROOKESIA_CHECK_FALSE_GOTO(setWifiIconState(0), err, "Set wifi state failed");
+    if (_data.flags.enable_wifi_icon) {
+        ESP_BROOKESIA_CHECK_FALSE_RETURN(addIcon(_data.wifi.icon_data, _data.wifi.area_index, _wifi_id), false,
+                                         "Add wifi icon failed");
+        ESP_BROOKESIA_CHECK_FALSE_GOTO(setWifiIconState(0), err, "Set wifi state failed");
+    }
 
     return true;
 
@@ -548,6 +572,80 @@ bool ESP_Brookesia_StatusBar::setWifiIconState(WifiState state) const
     return true;
 }
 
+bool ESP_Brookesia_StatusBar::beginBle(void)
+{
+    ESP_BROOKESIA_LOGD("Begin ble(0x%p)", this);
+
+    if (_data.flags.enable_ble_icon) {
+        ESP_BROOKESIA_CHECK_FALSE_RETURN(addIcon(_data.ble.icon_data, _data.ble.area_index, _ble_id), false,
+                                         "Add ble icon failed");
+        ESP_BROOKESIA_CHECK_FALSE_GOTO(setBleIconState(0), err, "Set ble state failed");
+    }
+
+    return true;
+
+err:
+    ESP_BROOKESIA_CHECK_FALSE_RETURN(removeIcon(_ble_id), false, "Delete ble failed");
+    return false;
+}
+
+bool ESP_Brookesia_StatusBar::setBleIconState(int state) const
+{
+    ESP_BROOKESIA_LOGD("Set ble icon state(0x%p: %d)", this, state);
+    ESP_BROOKESIA_CHECK_FALSE_RETURN(setIconState(_ble_id, state), false, "Set ble icon state failed");
+
+    return true;
+}
+
+bool ESP_Brookesia_StatusBar::showBleIcon(void) const
+{
+    ESP_BROOKESIA_LOGD("Show ble icon(0x%p)", this);
+    return setBleIconState(1);
+}
+
+bool ESP_Brookesia_StatusBar::hideBleIcon(void) const
+{
+    ESP_BROOKESIA_LOGD("Hide ble icon(0x%p)", this);
+    return setBleIconState(-1);
+}
+
+bool ESP_Brookesia_StatusBar::beginSd(void)
+{
+    ESP_BROOKESIA_LOGD("Begin sd(0x%p)", this);
+
+    if (_data.flags.enable_sd_icon) {
+        ESP_BROOKESIA_CHECK_FALSE_RETURN(addIcon(_data.sd.icon_data, _data.sd.area_index, _sd_id), false,
+                                         "Add sd icon failed");
+        ESP_BROOKESIA_CHECK_FALSE_GOTO(setSdIconState(0), err, "Set sd state failed");
+    }
+
+    return true;
+
+err:
+    ESP_BROOKESIA_CHECK_FALSE_RETURN(removeIcon(_sd_id), false, "Delete sd failed");
+    return false;
+}
+
+bool ESP_Brookesia_StatusBar::setSdIconState(int state) const
+{
+    ESP_BROOKESIA_LOGD("Set sd icon state(0x%p: %d)", this, state);
+    ESP_BROOKESIA_CHECK_FALSE_RETURN(setIconState(_sd_id, state), false, "Set sd icon state failed");
+
+    return true;
+}
+
+bool ESP_Brookesia_StatusBar::showSdIcon(void) const
+{
+    ESP_BROOKESIA_LOGD("Show sd icon(0x%p)", this);
+    return setSdIconState(1);
+}
+
+bool ESP_Brookesia_StatusBar::hideSdIcon(void) const
+{
+    ESP_BROOKESIA_LOGD("Hide sd icon(0x%p)", this);
+    return setSdIconState(-1);
+}
+
 bool ESP_Brookesia_StatusBar::beginClock(void)
 {
     ESP_Brookesia_LvObj_t clock_obj = nullptr;
@@ -558,6 +656,10 @@ bool ESP_Brookesia_StatusBar::beginClock(void)
 
     ESP_BROOKESIA_LOGD("Begin clock(0x%p)", this);
     ESP_BROOKESIA_CHECK_FALSE_RETURN(!checkClockInitialized(), false, "Already initialized");
+
+    if (!_data.flags.enable_clock) {
+        return true;
+    }
 
     /* Create objects */
     clock_obj = ESP_BROOKESIA_LV_OBJ(obj, _area_objs[_data.clock.area_index].get());
