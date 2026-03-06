@@ -45,7 +45,16 @@ static banchetto_state_t s_state = BANCHETTO_STATE_CHECKIN;
 // ═══════════════════════════════════════════════════════════
 // STATE MACHINE
 // ═══════════════════════════════════════════════════════════
-
+const char* banchetto_manager_get_banchetto_id(void)
+{
+    static char id[32] = {0};
+    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000))) {
+        if (s_list.count > 0)
+            snprintf(id, sizeof(id), "%s", s_list.items[0].banchetto);
+        xSemaphoreGive(data_mutex);
+    }
+    return id;
+}
 void banchetto_manager_set_state(banchetto_state_t state)
 {
     s_state = state;
@@ -193,7 +202,6 @@ esp_err_t banchetto_manager_fetch_from_server(void)
         ESP_LOGE(TAG, "Response body NULL");
         return ESP_FAIL;
     }
-
     static banchetto_list_t temp_list;
     memset(&temp_list, 0, sizeof(banchetto_list_t));
     ret = parse_banchetto_list(response_body, &temp_list);

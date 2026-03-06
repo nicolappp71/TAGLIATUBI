@@ -37,6 +37,7 @@ idf_component_register(
         driver 
         usb_host_hid
         driver esp_adc
+        bt
 )
 
 # Questa riga dice al compilatore di ignorare i warning sui campi mancanti in main.cpp

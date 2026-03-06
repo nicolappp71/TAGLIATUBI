@@ -106,7 +106,7 @@ esp_err_t http_get_request(const char *url, int *response_code, char **response_
         return ESP_ERR_INVALID_ARG;
     }
 
-    //ESP_LOGI(TAG, "🌐 HTTP GET: %s", url);
+    ESP_LOGI(TAG, "🌐 HTTP GET: %s", url);
 
     // Reset buffer
     response_len = 0;
@@ -135,8 +135,8 @@ esp_err_t http_get_request(const char *url, int *response_code, char **response_
         *response_code = esp_http_client_get_status_code(client);
         int content_length = esp_http_client_get_content_length(client);
 
-        //ESP_LOGI(TAG, "✓ HTTP Status: %d", *response_code);
-       // ESP_LOGI(TAG, "  Content-Length: %d", content_length);
+        ESP_LOGI(TAG, "✓ HTTP Status: %d", *response_code);
+        ESP_LOGI(TAG, "  Content-Length: %d", content_length);
 
         // Copia la risposta
         if (response_len > 0)
@@ -146,7 +146,7 @@ esp_err_t http_get_request(const char *url, int *response_code, char **response_
             {
                 memcpy(*response_body, response_buffer, response_len);
                 (*response_body)[response_len] = '\0';
-                //ESP_LOGI(TAG, "  Response: %s", *response_body);
+                ESP_LOGI(TAG, "  Response: %s", *response_body);
             }
         }
         else
