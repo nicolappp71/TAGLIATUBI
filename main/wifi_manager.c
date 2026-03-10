@@ -11,6 +11,7 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "credential.h"
+#include "offline_queue.h"
 
 // --- CONFIGURAZIONE ---
 #define MONITOR_CHECK_INTERVAL_MS   60000   // Ogni 30s controlla se c'è di meglio
@@ -105,7 +106,13 @@ static void event_handler(void* arg, esp_event_base_t event_base,
             return;
         }
 
-        ESP_LOGI(TAG, "Disconnesso. Riprovo... (%d/20)", s_retry_num);
+        if (s_retry_num >= 5) {
+            ESP_LOGW(TAG, "Troppi tentativi (%d). WiFi non disponibile, UI avviata senza rete.", s_retry_num);
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            return;
+        }
+
+        ESP_LOGI(TAG, "Disconnesso. Riprovo... (%d/5)", s_retry_num);
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_wifi_connect();
     } 
@@ -121,6 +128,13 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
+        // Sync operazioni offline pendenti
+        if (offline_queue_count() > 0)
+        {
+            ESP_LOGI(TAG, "WiFi riconnesso — avvio sync coda offline...");
+            offline_queue_process();
+        }
     }
 }
 

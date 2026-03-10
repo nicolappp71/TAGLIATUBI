@@ -18,6 +18,14 @@
 #include "audio_player.h"
 #include "tastiera.h"
 #include "mode.h"
+#include "offline_queue.h"
+#include "wifi_manager.h"
+#include "freertos/event_groups.h"
+
+static bool is_online(void)
+{
+    return (xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT) != 0;
+}
 
 extern void app_banchetto_update_page1(void);
 extern void app_banchetto_update_page2(void);
@@ -31,6 +39,7 @@ static const char *TAG = "BANCHETTO_MGR";
 
 #define SERVER_URL SERVER_BASE "/iot/banchetti_1_9_4.php"
 #define SERVER_BADGE_URL SERVER_BASE "/iot/badge.php"
+#define SD_CACHE_PATH "/sdcard/banchetti_cache.json"
 
 // ═══════════════════════════════════════════════════════════
 // STATO INTERNO
@@ -202,6 +211,20 @@ esp_err_t banchetto_manager_fetch_from_server(void)
         ESP_LOGE(TAG, "Response body NULL");
         return ESP_FAIL;
     }
+
+    // Salva cache su SD
+    FILE *cache_f = fopen(SD_CACHE_PATH, "w");
+    if (cache_f)
+    {
+        fwrite(response_body, 1, strlen(response_body), cache_f);
+        fclose(cache_f);
+        ESP_LOGI(TAG, "Cache salvata su SD: %s", SD_CACHE_PATH);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Impossibile salvare cache su SD (SD assente?)");
+    }
+
     static banchetto_list_t temp_list;
     memset(&temp_list, 0, sizeof(banchetto_list_t));
     ret = parse_banchetto_list(response_body, &temp_list);
@@ -223,6 +246,79 @@ esp_err_t banchetto_manager_fetch_from_server(void)
         web_server_broadcast_update();
         return ESP_OK;
     }
+    ESP_LOGE(TAG, "Timeout mutex");
+    return ESP_FAIL;
+}
+
+// ═══════════════════════════════════════════════════════════
+// LOAD FROM SD CACHE
+// ═══════════════════════════════════════════════════════════
+
+esp_err_t banchetto_manager_load_from_sd(void)
+{
+    FILE *f = fopen(SD_CACHE_PATH, "r");
+    if (!f)
+    {
+        ESP_LOGE(TAG, "Nessuna cache SD disponibile: %s", SD_CACHE_PATH);
+        return ESP_FAIL;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (size <= 0)
+    {
+        ESP_LOGE(TAG, "Cache SD vuota o non leggibile");
+        fclose(f);
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(size + 1);
+    if (!buf)
+    {
+        fclose(f);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t read = fread(buf, 1, size, f);
+    fclose(f);
+    buf[read] = '\0';
+
+    if (read == 0)
+    {
+        ESP_LOGE(TAG, "Errore lettura cache SD");
+        free(buf);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI("SD_CACHE", "Risposta (%ld bytes):", read);
+    for (size_t i = 0; i < read; i += 200)
+    {
+        ESP_LOGI("SD_CACHE", "%.*s", (int)((read - i) > 200 ? 200 : (read - i)), buf + i);
+    }
+
+    static banchetto_list_t temp_list;
+    memset(&temp_list, 0, sizeof(banchetto_list_t));
+    esp_err_t ret = parse_banchetto_list(buf, &temp_list);
+    free(buf);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Errore parsing cache SD");
+        return ESP_FAIL;
+    }
+
+    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+    {
+        memcpy(&s_list, &temp_list, sizeof(banchetto_list_t));
+        if (s_current_idx >= s_list.count)
+            s_current_idx = 0;
+        xSemaphoreGive(data_mutex);
+        ESP_LOGI(TAG, "Cache SD caricata — %d articoli", s_list.count);
+        return ESP_OK;
+    }
+
     ESP_LOGE(TAG, "Timeout mutex");
     return ESP_FAIL;
 }
@@ -390,6 +486,13 @@ bool banchetto_manager_versa(uint32_t qta)
     {
         ESP_LOGW(TAG, "Sessione NON aperta");
         xSemaphoreGive(data_mutex);
+         if (!s_list.items[0].sessione_aperta)
+            {
+                popup_avviso_open(LV_SYMBOL_WARNING " Timbratura mancante",
+                                  is_online()
+                                      ? "Effettuare il login con\nil badge prima di continuare."
+                                      : "Effettuare il login con\nil badge prima di continuare.\n\nModalità OFFLINE");
+            }
         return false;
     }
 
@@ -407,16 +510,25 @@ bool banchetto_manager_versa(uint32_t qta)
     snprintf(url, sizeof(url), "%s?key=%s&comando=versa&qta=%lu",
              SERVER_URL, device_key, qta);
 
-    int response_code = 0;
-    char *response_body = NULL;
-    esp_err_t ret = http_get_request(url, &response_code, &response_body);
-    if (response_body)
-        free(response_body);
-
-    if (ret != ESP_OK || response_code != 200)
+    if (!is_online())
     {
-        ESP_LOGE(TAG, "Errore HTTP versa (code: %d)", response_code);
-        return false;
+        ESP_LOGW(TAG, "OFFLINE — versa accodata: qta=%lu", qta);
+        offline_queue_push(url);
+        // Lo stato locale viene aggiornato sotto normalmente
+    }
+    else
+    {
+        int response_code = 0;
+        char *response_body = NULL;
+        esp_err_t ret = http_get_request(url, &response_code, &response_body);
+        if (response_body)
+            free(response_body);
+
+        if (ret != ESP_OK || response_code != 200)
+        {
+            ESP_LOGE(TAG, "Errore HTTP versa (code: %d)", response_code);
+            return false;
+        }
     }
 
     bool all_ok = true;
@@ -509,6 +621,13 @@ bool banchetto_manager_scarto(uint32_t qta_scarti)
     char url[256];
     snprintf(url, sizeof(url), "%s?key=%s&comando=scarto&qta=%lu&ord_prod=%lu",
              SERVER_URL, device_key, qta_scarti, ord_prod);
+
+    if (!is_online())
+    {
+        ESP_LOGW(TAG, "OFFLINE — scarto accodato: qta=%lu ord=%lu", qta_scarti, ord_prod);
+        offline_queue_push(url);
+        return true;
+    }
 
     int response_code = 0;
     char *response_body = NULL;
@@ -627,6 +746,22 @@ void banchetto_manager_set_barcode(const char *barcode)
     snprintf(url, sizeof(url), "%s?key=%s&comando=scatola&scatola=%s&ord_prod=%lu",
              SERVER_URL, device_key, barcode,
              s_list.items[s_current_idx].ord_prod);
+
+    if (!is_online())
+    {
+        ESP_LOGW(TAG, "OFFLINE — scatola accodata: %s", barcode);
+        offline_queue_push(url);
+        // Aggiorna stato locale
+        if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+        {
+            banchetto_data_t *item = &s_list.items[s_current_idx];
+            if (strncmp(item->matr_scatola_corrente, barcode, 31) != 0)
+                item->qta_scatola = 0;
+            strncpy(item->matr_scatola_corrente, barcode, sizeof(item->matr_scatola_corrente) - 1);
+            xSemaphoreGive(data_mutex);
+        }
+        return;
+    }
 
     int response_code = 0;
     char *response_body = NULL;
@@ -862,6 +997,20 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
         ESP_LOGE(TAG, "Errore parsing risposta badge");
         if (response_body)
             free(response_body);
+        return ESP_FAIL;
+    }
+
+    // ── ERRORE SERVER (badge non trovato, etc.) ──────────
+    if (badge_resp.errore[0] != '\0')
+    {
+        ESP_LOGE(TAG, "Errore badge dal server: %s", badge_resp.errore);
+        free(response_body);
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
+            popup_avviso_open(LV_SYMBOL_WARNING " Badge non riconosciuto", badge_resp.errore);
+            lvgl_port_unlock();
+        }
+        myBeep();
         return ESP_FAIL;
     }
 

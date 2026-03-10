@@ -15,6 +15,7 @@ idf_component_register(
     "log_manager.c"
     "ble_manager.c"
     "ota_manager.c"
+    "offline_queue.c"
     INCLUDE_DIRS "."
     REQUIRES 
         espressif__esp_hosted 

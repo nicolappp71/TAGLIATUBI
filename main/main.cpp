@@ -279,7 +279,24 @@ extern "C" void app_main(void)
     init_rfid_uart();
     key_manager_init();
     banchetto_manager_init();
-    banchetto_manager_fetch_from_server();
+
+    esp_err_t sd_ret = bsp_sdcard_mount();
+    if (sd_ret == ESP_OK)
+    {
+        ESP_LOGI(TAG, "SD Card montata correttamente!");
+        log_manager_sd_ready();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Fallimento montaggio SD: %s", esp_err_to_name(sd_ret));
+    }
+
+    if (banchetto_manager_fetch_from_server() != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Fetch server fallito, carico da SD cache...");
+        banchetto_manager_load_from_sd();
+    }
+
     settings_init();
     web_server_init();
     ble_manager_init();
@@ -316,6 +333,7 @@ extern "C" void app_main(void)
         xTaskCreate(wifi_status_update_task, "WiFi Status", 4096, status_bar, 1, NULL);
         xTaskCreate(orario_server_update_task, "Orario Server", 4096, status_bar, 1, NULL);
         xTaskCreate(battery_status_update_task, "Battery Status", 4096, status_bar, 1, NULL);
+        status_bar->setBleIconState(1);
     }
 
     /* Backlight task: fuori dall'if della status_bar, serve sempre */
@@ -344,25 +362,9 @@ extern "C" void app_main(void)
     //     fclose(f);
     //     ESP_LOGI(TAG, "Contenuto file SD: %s", line);
     // }
-    esp_err_t sd_ret = bsp_sdcard_mount();
-    if (sd_ret == ESP_OK)
+    if (status_bar != nullptr)
     {
-        ESP_LOGI(TAG, "SD Card montata correttamente!");
-        log_manager_sd_ready();
-
-        if (status_bar != nullptr)
-        {
-            status_bar->setSdIconState(1);
-        }
-    }
-    else
-    {
-        ESP_LOGE(TAG, "Fallimento montaggio SD: %s", esp_err_to_name(sd_ret));
-
-        if (status_bar != nullptr)
-        {
-            status_bar->setSdIconState(0);
-        }
+        status_bar->setSdIconState(sd_ret == ESP_OK ? 1 : 0);
     }
     banchetto->installApp(new AppBanchetto());
     inizializza_testi_gui();

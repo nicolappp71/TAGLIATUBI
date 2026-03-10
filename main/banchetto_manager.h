@@ -151,6 +151,7 @@ typedef struct
 
 void          banchetto_manager_init(void);
 esp_err_t     banchetto_manager_fetch_from_server(void);
+esp_err_t     banchetto_manager_load_from_sd(void);
 esp_err_t     banchetto_manager_assegna_banchetto(const char *barcode);
 esp_err_t     banchetto_manager_login_badge(const char *badge);
 esp_err_t     banchetto_manager_login_by_matricola(uint16_t matricola);
