@@ -16,7 +16,7 @@
 static const char *TAG = "HTTP_CLIENT";
 
 #define MAX_HTTP_RECV_BUFFER 8192
-#define HTTP_TIMEOUT_MS 5000
+#define HTTP_TIMEOUT_MS 10000
 
 // Buffer per ricevere la risposta
 static char response_buffer[MAX_HTTP_RECV_BUFFER];

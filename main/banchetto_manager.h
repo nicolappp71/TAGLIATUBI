@@ -151,6 +151,7 @@ typedef struct
 
 void          banchetto_manager_init(void);
 esp_err_t     banchetto_manager_fetch_from_server(void);
+void          banchetto_manager_start_periodic_refresh(void);
 esp_err_t     banchetto_manager_load_from_sd(void);
 esp_err_t     banchetto_manager_assegna_banchetto(const char *barcode);
 esp_err_t     banchetto_manager_login_badge(const char *badge);
@@ -181,6 +182,7 @@ banchetto_state_t banchetto_manager_get_state(void);
 void          banchetto_manager_print_status(void);
 bool          banchetto_manager_is_ready(void);
 void          banchetto_manager_reset_data(void);
+void          banchetto_manager_reconstruct_from_journal(void);
 
 #ifdef __cplusplus
 }

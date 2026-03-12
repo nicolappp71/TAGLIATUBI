@@ -17,6 +17,7 @@ extern EventGroupHandle_t s_wifi_event_group;
 
 void wifi_init_sta(void);
 int wifi_get_rssi(void);
+bool wifi_is_connected(void);
 
 #ifdef __cplusplus
 }

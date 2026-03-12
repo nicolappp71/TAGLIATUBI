@@ -29,9 +29,12 @@ private:
     static lv_obj_t *lbl_banc[BANCHETTO_MAX_ITEMS];
 
     static lv_obj_t *current_scr;
+    static lv_obj_t *offline_banner;
+    static lv_timer_t *offline_timer;
 
     static void crea_page1(uint8_t idx);
     static void swipe_event_cb(lv_event_t *e);
+    static void offline_timer_cb(lv_timer_t *t);
 
     lv_obj_t *container;
     lv_obj_t *test_button;

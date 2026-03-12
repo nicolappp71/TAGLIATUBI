@@ -10,6 +10,7 @@
 #include <string.h>
 
 static const char *TAG = "BLE_MGR";
+static volatile bool s_scan_paused = false;
 
 /* UUID del servizio e characteristic della CNC */
 static const ble_uuid128_t svc_uuid =
@@ -244,6 +245,11 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
 
 static void ble_start_scan(void)
 {
+    if (s_scan_paused) {
+        ESP_LOGD(TAG, "Scan BLE sospesa (WiFi scan in corso).");
+        return;
+    }
+
     struct ble_gap_disc_params scan_params = {
         .itvl = 160,
         .window = 80,
@@ -295,6 +301,26 @@ static void ble_host_task(void *param)
     ESP_LOGI(TAG, "Task NimBLE host avviato");
     nimble_port_run();
     nimble_port_freertos_deinit();
+}
+
+/* ===== Pause / Resume scan (per WiFi coexistence) ===== */
+
+void ble_manager_pause_scan(void)
+{
+    s_scan_paused = true;
+    if (ble_gap_disc_active()) {
+        ble_gap_disc_cancel();
+        ESP_LOGI(TAG, "Scan BLE sospesa per WiFi scan.");
+    }
+}
+
+void ble_manager_resume_scan(void)
+{
+    s_scan_paused = false;
+    if (!is_connected) {
+        ESP_LOGI(TAG, "Scan BLE ripresa.");
+        ble_start_scan();
+    }
 }
 
 /* ===== Init ===== */

@@ -7,9 +7,10 @@ extern "C"
 {
 #include "banchetto_manager.h"
 #include "tastiera.h"
+#include "wifi_manager.h"
 }
 extern "C" void popup_controllo_open(void);
-extern "C" void popup_avviso_open(const char *titolo, const char *messaggio);
+extern "C" void popup_avviso_open(const char *titolo, const char *messaggio, bool offline);
 
 static const char *TAG = "AppBanchetto";
 
@@ -24,6 +25,8 @@ lv_obj_t *AppBanchetto::lbl_fase[BANCHETTO_MAX_ITEMS] = {};
 lv_obj_t *AppBanchetto::lbl_sessione_stato[BANCHETTO_MAX_ITEMS] = {};
 lv_obj_t *AppBanchetto::lbl_banc[BANCHETTO_MAX_ITEMS] = {};
 lv_obj_t *AppBanchetto::current_scr = nullptr;
+lv_obj_t *AppBanchetto::offline_banner = nullptr;
+lv_timer_t *AppBanchetto::offline_timer = nullptr;
 
 LV_IMG_DECLARE(b2);
 
@@ -56,6 +59,18 @@ extern "C" void app_banchetto_update_page2(void)
     uint8_t count = banchetto_manager_get_count();
     for (uint8_t i = 0; i < count; i++)
         AppBanchetto::update_page2(i);
+}
+
+// ─────────────────────────────────────────────────────────
+// OFFLINE BANNER — timer callback (ogni 2s)
+// ─────────────────────────────────────────────────────────
+void AppBanchetto::offline_timer_cb(lv_timer_t *t)
+{
+    if (!offline_banner) return;
+    if (wifi_is_connected())
+        lv_obj_add_flag(offline_banner, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_clear_flag(offline_banner, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -105,7 +120,8 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
             if (!d.sessione_aperta)
             {
                 popup_avviso_open(LV_SYMBOL_WARNING " Timbratura mancante",
-                                  "Effettuare il login con\nil badge prima di continuare.");
+                                  "Effettuare il login con\nil badge prima di continuare.",
+                                  !wifi_is_connected());
                 return;
             }
             lv_scr_load_anim(objects[idx].main, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
@@ -538,7 +554,8 @@ static void check_ordine_e_avvisa(void)
     banchetto_data_t d;
     if (banchetto_manager_get_data(&d) && d.ord_prod == 0)
         popup_avviso_open(LV_SYMBOL_WARNING " Nessun ordine",
-                          "Nessun ordine attivo.\nTornare alla schermata principale\ne avviare un nuovo ordine.");
+                          "Nessun ordine attivo.\nTornare alla schermata principale\ne avviare un nuovo ordine.",
+                          !wifi_is_connected());
 }
 
 // ─────────────────────────────────────────────────────────
@@ -575,6 +592,32 @@ bool AppBanchetto::run(void)
     banchetto_manager_set_current_index(0);
     lv_disp_load_scr(page1_scr[0]);
     current_scr = page1_scr[0];
+
+    // ── BANNER OFFLINE fisso su lv_layer_top() ────────────────
+    offline_banner = lv_obj_create(lv_layer_top());
+    lv_obj_set_pos(offline_banner, 820, 360);
+    lv_obj_set_size(offline_banner, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(offline_banner, lv_color_hex(0xFF6600), 0);
+    lv_obj_set_style_bg_opa(offline_banner, 230, 0);
+    lv_obj_set_style_border_width(offline_banner, 0, 0);
+    lv_obj_set_style_radius(offline_banner, 6, 0);
+    lv_obj_set_style_pad_top(offline_banner, 6, 0);
+    lv_obj_set_style_pad_bottom(offline_banner, 6, 0);
+    lv_obj_set_style_pad_left(offline_banner, 14, 0);
+    lv_obj_set_style_pad_right(offline_banner, 14, 0);
+    lv_obj_clear_flag(offline_banner, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    {
+        lv_obj_t *lbl = lv_label_create(offline_banner);
+        lv_label_set_text(lbl, LV_SYMBOL_WARNING " OFFLINE");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_26, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(lbl);
+    }
+    // stato iniziale
+    if (wifi_is_connected())
+        lv_obj_add_flag(offline_banner, LV_OBJ_FLAG_HIDDEN);
+
+    offline_timer = lv_timer_create(offline_timer_cb, 2000, NULL);
 
     check_ordine_e_avvisa();
     ESP_LOGI(TAG, "App loaded — %d articoli, showing page1[0]", count);
@@ -629,6 +672,8 @@ bool AppBanchetto::back(void)
 bool AppBanchetto::close(void)
 {
     ESP_LOGI(TAG, "Close app");
+    if (offline_timer) { lv_timer_del(offline_timer); offline_timer = nullptr; }
+    if (offline_banner) { lv_obj_del(offline_banner); offline_banner = nullptr; }
     for (uint8_t i = 0; i < BANCHETTO_MAX_ITEMS; i++)
     {
         page1_scr[i] = nullptr;

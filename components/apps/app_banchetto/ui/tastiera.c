@@ -39,7 +39,7 @@ static lv_obj_t *crea_tasto(lv_obj_t *parent, const char *label,
 // ─────────────────────────────────────────────────────────
 // POPUP AVVISO GENERICO
 // ─────────────────────────────────────────────────────────
-void popup_avviso_open(const char *titolo, const char *msg)
+void popup_avviso_open(const char *titolo, const char *msg, bool offline)
 {
     if (avviso_popup)
     {
@@ -91,6 +91,14 @@ void popup_avviso_open(const char *titolo, const char *msg)
     lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_30, 0);
     lv_obj_set_style_text_color(btn_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(btn_lbl);
+
+    if (offline) {
+        lv_obj_t *off_lbl = lv_label_create(p);
+        lv_label_set_text(off_lbl, LV_SYMBOL_WARNING " OFFLINE");
+        lv_obj_set_style_text_font(off_lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(off_lbl, lv_color_hex(0xFF8C00), 0);
+        lv_obj_align_to(off_lbl, btn, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+    }
 
     myBeep();
 }
@@ -347,7 +355,7 @@ static void popup_errore_close_cb(lv_event_t *e)
 }
 static void mostra_errore_scarto(const char *msg)
 {
-    popup_avviso_open(LV_SYMBOL_WARNING " Scarto non valido", msg);
+    popup_avviso_open(LV_SYMBOL_WARNING " Scarto non valido", msg, false);
 }
 
 static void cb_invia(lv_event_t *e)

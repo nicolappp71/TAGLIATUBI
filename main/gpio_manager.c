@@ -41,8 +41,12 @@ static void gpio_task(void *pvParameters)
             if (timeout >= 500) {
                 ESP_LOGW(TAG, "⚠️ TIMEOUT - pin ancora a massa");
             }
-            
-            ESP_LOGI(TAG, "✓ GPIO %d rilasciato\n", GPIO_INPUT_PIN);
+
+            ESP_LOGI(TAG, "✓ GPIO %d rilasciato", GPIO_INPUT_PIN);
+
+            // Debounce post-rilascio: scarta notifiche accumulate durante il processing
+            vTaskDelay(pdMS_TO_TICKS(150));
+            xTaskNotifyStateClear(NULL);
         } else {
             ESP_LOGW(TAG, "⚠ Falso interrupt");
         }

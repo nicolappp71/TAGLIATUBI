@@ -1308,6 +1308,7 @@ esp_err_t web_server_init(void)
     config.task_priority = 3;
     config.lru_purge_enable = true;
     config.core_id = 1;
+    config.stack_size = 8192; // <--- AGGIUNGI QUESTA RIGA
 
     if (httpd_start(&server, &config) != ESP_OK)
     {
