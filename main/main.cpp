@@ -24,6 +24,7 @@
 extern "C"
 {
 #include "wifi_manager.h"
+#include "time_manager.h"
 #include "web_server.h"
 #include "banchetto_manager.h"
 #include "settings_manager.h"
@@ -38,6 +39,7 @@ extern "C"
 #include "log_manager.h"
 #include "ble_manager.h"
 #include "ota_manager.h"
+#include "offline_journal.h"
 }
 
 static const char *TAG = "MAIN";
@@ -274,6 +276,9 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     wifi_init_sta();
 
+    if (wifi_is_connected())
+        time_manager_sync();
+
     gpio_init();
     init_usb_driver();
     init_rfid_uart();
@@ -285,6 +290,10 @@ extern "C" void app_main(void)
     {
         ESP_LOGI(TAG, "SD Card montata correttamente!");
         log_manager_sd_ready();
+        if (!time_manager_is_synced())
+            time_manager_restore_from_sd();
+        time_manager_start_periodic_save();
+        offline_journal_print_all();
     }
     else
     {
@@ -295,7 +304,14 @@ extern "C" void app_main(void)
     {
         ESP_LOGW(TAG, "Fetch server fallito, carico da SD cache...");
         banchetto_manager_load_from_sd();
+        banchetto_manager_reconstruct_from_journal();
     }
+    else
+    {
+        offline_journal_replay();
+    }
+
+    banchetto_manager_start_periodic_refresh();
 
     settings_init();
     web_server_init();
