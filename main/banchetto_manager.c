@@ -34,18 +34,13 @@ extern void app_banchetto_update_page2(void);
 extern void app_assegna_banchetto_close(void);
 extern void deep_sleep_reset_timer(void);
 
-
-static char s_formazione_cod_art[32] = {0}; // codice articolo mancante formazione
+static char s_formazione_cod_art[32] = {0};
 static char s_formazione_badge[64] = {0};
 static const char *TAG = "BANCHETTO_MGR";
 
 #define SERVER_URL SERVER_BASE "/iot/banchetti_1_9_4.php"
 #define SERVER_BADGE_URL SERVER_BASE "/iot/badge.php"
 #define SD_CACHE_PATH "/sdcard/banchetti_cache.json"
-
-// ═══════════════════════════════════════════════════════════
-// STATO INTERNO
-// ═══════════════════════════════════════════════════════════
 
 static banchetto_list_t s_list = {0};
 static uint8_t s_current_idx = 0;
@@ -54,9 +49,68 @@ static char device_key[17] = {0};
 static banchetto_state_t s_state = BANCHETTO_STATE_CHECKIN;
 
 // ═══════════════════════════════════════════════════════════
-// JOURNAL HELPER — costruisce e accoda una riga JSON
-// op: "login","logout","versa","scarto","barcode"
-// mat_override: usare solo per logout (matricola già cancellata da s_list)
+// UI CALLBACKS E AUDIO
+// ═══════════════════════════════════════════════════════════
+
+static void reset_panel_style(lv_timer_t *timer)
+{
+    lv_obj_t *obj = (lv_obj_t *)timer->user_data;
+    if (obj != NULL)
+    {
+        lv_obj_set_style_outline_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_invalidate(obj);
+    }
+}
+
+static void assegna_ok_btn_cb(lv_event_t *e)
+{
+    lv_obj_t *p = (lv_obj_t *)lv_event_get_user_data(e);
+    if (p)
+        lv_obj_del(p);
+    app_assegna_banchetto_close();
+}
+
+void visual_feedback_ok(void)
+{
+    lv_obj_t *obj = objects[s_current_idx].obj11;
+    if (obj != NULL)
+    {
+        lv_obj_set_style_outline_color(obj, lv_color_hex(0x2ECC71), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_outline_width(obj, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_outline_opa(obj, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_timer_t *timer = lv_timer_create(reset_panel_style, 500, obj);
+        lv_timer_set_repeat_count(timer, 1);
+    }
+}
+
+void myBeep(void)
+{
+    char *path = BSP_SPIFFS_MOUNT_POINT "/music/beep.mp3";
+    FILE *f = fopen(path, "rb");
+
+    if (f)
+    {
+        if (audio_player_play(f) == ESP_OK)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            audio_player_stop(); // Questo ferma l'audio e chiude il file in sicurezza
+        }
+        else
+        {
+            ESP_LOGE("AUDIO", "Errore avvio riproduzione");
+            fclose(f); // Chiudiamo a mano solo se il player fallisce l'avvio
+        }
+    }
+    else
+    {
+        ESP_LOGE("AUDIO", "File non trovato: %s", path);
+    }
+}
+// ═══════════════════════════════════════════════════════════
+// JOURNAL HELPER
+// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// JOURNAL HELPER (OTTIMIZZATO PER RISPARMIO RAM)
 // ═══════════════════════════════════════════════════════════
 static void journal_op(const char *op, uint8_t idx, const char *url,
                        int qta, const char *mat_override,
@@ -65,75 +119,99 @@ static void journal_op(const char *op, uint8_t idx, const char *url,
     char ts[32] = "??:??:??";
     time_manager_get_ts(ts, sizeof(ts));
 
-    banchetto_data_t *d  = &s_list.items[idx];
-    const char *mat  = (mat_override && mat_override[0]) ? mat_override : d->matricola;
+    banchetto_data_t *d = &s_list.items[idx];
+    const char *mat = (mat_override && mat_override[0]) ? mat_override : d->matricola;
     const char *banc = d->banchetto;
 
-    char *line = malloc(2048);
-    if (!line) { ESP_LOGE(TAG, "journal_op: malloc line fallito"); return; }
+    // Buffer ridotto e allocato con calloc per evitare spazzatura
+    char *line = calloc(1, 1024);
+    if (!line)
+    {
+        ESP_LOGE(TAG, "journal_op: calloc line fallito");
+        return;
+    }
 
-    if (strcmp(op, "login") == 0) {
-        snprintf(line, 2048,
-            "{\"ts\":\"%s\",\"op\":\"login\",\"idx\":%d,\"banchetto\":\"%s\","
-            "\"matricola\":\"%s\",\"nome\":\"%s\",\"cognome\":\"%s\",\"url\":\"%s\"}",
-            ts, idx, banc, mat, nome ? nome : "", cognome ? cognome : "", url ? url : "");
-    } else if (strcmp(op, "logout") == 0) {
-        snprintf(line, 2048,
-            "{\"ts\":\"%s\",\"op\":\"logout\",\"idx\":%d,\"banchetto\":\"%s\","
-            "\"matricola\":\"%s\",\"url\":\"%s\"}",
-            ts, idx, banc, mat, url ? url : "");
-    } else if (strcmp(op, "versa") == 0 || strcmp(op, "scarto") == 0) {
-        /* Costruisce URL per replay offline con tutti i parametri necessari */
+    if (strcmp(op, "login") == 0)
+    {
+        snprintf(line, 1024,
+                 "{\"ts\":\"%s\",\"op\":\"login\",\"idx\":%d,\"banchetto\":\"%s\","
+                 "\"matricola\":\"%s\",\"nome\":\"%s\",\"cognome\":\"%s\",\"url\":\"%s\"}",
+                 ts, idx, banc, mat, nome ? nome : "", cognome ? cognome : "", url ? url : "");
+    }
+    else if (strcmp(op, "logout") == 0)
+    {
+        snprintf(line, 1024,
+                 "{\"ts\":\"%s\",\"op\":\"logout\",\"idx\":%d,\"banchetto\":\"%s\","
+                 "\"matricola\":\"%s\",\"url\":\"%s\"}",
+                 ts, idx, banc, mat, url ? url : "");
+    }
+    else if (strcmp(op, "versa") == 0 || strcmp(op, "scarto") == 0)
+    {
         char ts_enc[32];
-        strncpy(ts_enc, ts, sizeof(ts_enc) - 1);
-        ts_enc[sizeof(ts_enc) - 1] = '\0';
+        snprintf(ts_enc, sizeof(ts_enc), "%s", ts);
         for (int i = 0; ts_enc[i]; i++)
-            if (ts_enc[i] == ' ') { ts_enc[i] = '+'; break; }
+            if (ts_enc[i] == ' ')
+            {
+                ts_enc[i] = '+';
+                break;
+            }
 
-        char *url_salvati = malloc(1024);
-        if (!url_salvati) { ESP_LOGE(TAG, "journal_op: malloc url fallito"); free(line); return; }
-        snprintf(url_salvati, 1024,
-            "%s?key=%s&comando=versa_salvati&qta=%d&banchetto=%s"
-            "&dataora=%s&fase=%s&operatore=%s&matr_scatola=%s&cod_art=%s&ord_prod=%lu&ciclo=%s",
-            SERVER_URL, device_key, qta, banc,
-            ts_enc, d->fase, mat, d->matr_scatola_corrente,
-            d->codice_articolo, (unsigned long)d->ord_prod, d->ciclo);
+        char *url_salvati = calloc(1, 512); // Ridotto a 512 byte (più che sufficiente)
+        if (!url_salvati)
+        {
+            ESP_LOGE(TAG, "journal_op: calloc url fallito");
+            free(line);
+            return;
+        }
 
-        snprintf(line, 2048,
-            "{\"ts\":\"%s\",\"op\":\"%s\",\"idx\":%d,\"banchetto\":\"%s\","
-            "\"matricola\":\"%s\",\"qta\":%d,\"url\":\"%s\"}",
-            ts, op, idx, banc, mat, qta, url_salvati);
+        snprintf(url_salvati, 512,
+                 "%s?key=%s&comando=versa_salvati&qta=%d&banchetto=%s"
+                 "&dataora=%s&fase=%s&operatore=%s&matr_scatola=%s&cod_art=%s&ord_prod=%lu&ciclo=%s",
+                 SERVER_URL, device_key, qta, banc,
+                 ts_enc, d->fase, mat, d->matr_scatola_corrente,
+                 d->codice_articolo, (unsigned long)d->ord_prod, d->ciclo);
+
+        snprintf(line, 1024,
+                 "{\"ts\":\"%s\",\"op\":\"%s\",\"idx\":%d,\"banchetto\":\"%s\","
+                 "\"matricola\":\"%s\",\"qta\":%d,\"url\":\"%s\"}",
+                 ts, op, idx, banc, mat, qta, url_salvati);
         free(url_salvati);
-    } else if (strcmp(op, "barcode") == 0) {
-        snprintf(line, 2048,
-            "{\"ts\":\"%s\",\"op\":\"barcode\",\"idx\":%d,\"banchetto\":\"%s\","
-            "\"matricola\":\"%s\",\"barcode\":\"%s\",\"url\":\"%s\"}",
-            ts, idx, banc, mat, barcode ? barcode : "", url ? url : "");
-    } else {
+    }
+    else if (strcmp(op, "barcode") == 0)
+    {
+        snprintf(line, 1024,
+                 "{\"ts\":\"%s\",\"op\":\"barcode\",\"idx\":%d,\"banchetto\":\"%s\","
+                 "\"matricola\":\"%s\",\"barcode\":\"%s\",\"url\":\"%s\"}",
+                 ts, idx, banc, mat, barcode ? barcode : "", url ? url : "");
+    }
+    else
+    {
         free(line);
         return;
     }
+
     offline_journal_append(line);
     free(line);
 }
-
 // ═══════════════════════════════════════════════════════════
-// STATE MACHINE
+// STATE MACHINE E NAVIGAZIONE
 // ═══════════════════════════════════════════════════════════
-const char* banchetto_manager_get_banchetto_id(void)
+const char *banchetto_manager_get_banchetto_id(void)
 {
     static char id[32] = {0};
-    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000))) {
+    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+    {
         if (s_list.count > 0)
             snprintf(id, sizeof(id), "%s", s_list.items[0].banchetto);
         xSemaphoreGive(data_mutex);
     }
     return id;
 }
+
 void banchetto_manager_set_state(banchetto_state_t state)
 {
     s_state = state;
-    const char *names[] = {"CHECKIN", "CONTEGGIO", "CONTROLLO", "ASSEGNA_BANCHETTO"};
+    const char *names[] = {"CHECKIN", "CONTEGGIO", "CONTROLLO", "ASSEGNA_BANCHETTO", "ATTESA_FORMATORE", "ATTESA_CONFERMA_FORMAZIONE"};
     ESP_LOGI(TAG, "Stato → %s", names[state]);
 }
 
@@ -141,10 +219,6 @@ banchetto_state_t banchetto_manager_get_state(void)
 {
     return s_state;
 }
-
-// ═══════════════════════════════════════════════════════════
-// NAVIGAZIONE UI
-// ═══════════════════════════════════════════════════════════
 
 uint8_t banchetto_manager_get_current_index(void)
 {
@@ -172,49 +246,6 @@ uint8_t banchetto_manager_get_count(void)
         xSemaphoreGive(data_mutex);
     }
     return count;
-}
-
-// ═══════════════════════════════════════════════════════════
-// FEEDBACK VISIVO E SONORO
-// ═══════════════════════════════════════════════════════════
-
-void reset_panel_style(lv_timer_t *timer)
-{
-    lv_obj_t *obj = (lv_obj_t *)timer->user_data;
-    if (obj != NULL)
-    {
-        lv_obj_set_style_outline_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_invalidate(obj);
-    }
-}
-
-void visual_feedback_ok(void)
-{
-    lv_obj_t *obj = objects[s_current_idx].obj11;
-    if (obj != NULL)
-    {
-        lv_obj_set_style_outline_color(obj, lv_color_hex(0x2ECC71), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_outline_width(obj, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_outline_opa(obj, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_timer_t *timer = lv_timer_create(reset_panel_style, 500, obj);
-        lv_timer_set_repeat_count(timer, 1);
-    }
-}
-
-void myBeep(void)
-{
-    char *path = BSP_SPIFFS_MOUNT_POINT "/music/beep.mp3";
-    FILE *f = fopen(path, "rb");
-    if (f)
-    {
-        audio_player_play(f);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        audio_player_stop();
-    }
-    else
-    {
-        ESP_LOGE("AUDIO", "File non trovato: %s", path);
-    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -278,7 +309,6 @@ esp_err_t banchetto_manager_fetch_from_server(void)
         return ESP_FAIL;
     }
 
-    // Salva cache su SD
     FILE *cache_f = fopen(SD_CACHE_PATH, "w");
     if (cache_f)
     {
@@ -311,7 +341,6 @@ esp_err_t banchetto_manager_fetch_from_server(void)
         ESP_LOGI(TAG, "Fetch OK — %d articoli", s_list.count);
         web_server_broadcast_update();
 
-        // Aggiorna cache badge e formazioni su SD
         if (s_list.count > 0 && s_list.items[0].banchetto[0] != '\0')
             badge_cache_refresh(device_key, s_list.items[0].banchetto);
 
@@ -322,62 +351,84 @@ esp_err_t banchetto_manager_fetch_from_server(void)
 }
 
 // ═══════════════════════════════════════════════════════════
-// RICOSTRUZIONE STATO DA JOURNAL (chiamare dopo load_from_sd)
+// RICOSTRUZIONE STATO DA JOURNAL
 // ═══════════════════════════════════════════════════════════
 void banchetto_manager_reconstruct_from_journal(void)
 {
     FILE *f = fopen("/sdcard/offline_journal.jsonl", "r");
-    if (!f) { ESP_LOGI(TAG, "Nessun journal da ricostruire"); return; }
+    if (!f)
+    {
+        ESP_LOGI(TAG, "Nessun journal da ricostruire");
+        return;
+    }
 
     ESP_LOGI(TAG, "Ricostruzione stato da journal...");
     char line[512];
 
-    while (fgets(line, sizeof(line), f)) {
+    while (fgets(line, sizeof(line), f))
+    {
         int len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-        if (strlen(line) < 5) continue;
+        if (len > 0 && line[len - 1] == '\n')
+            line[len - 1] = '\0';
+        if (strlen(line) < 5)
+            continue;
 
         cJSON *j = cJSON_Parse(line);
-        if (!j) continue;
+        if (!j)
+            continue;
 
         const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(j, "op"));
         int idx = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "idx"));
-        if (!op) { cJSON_Delete(j); continue; }
-        if (idx < 0 || idx >= s_list.count) idx = 0;
+        if (!op)
+        {
+            cJSON_Delete(j);
+            continue;
+        }
+        if (idx < 0 || idx >= s_list.count)
+            idx = 0;
 
-        if (strcmp(op, "login") == 0) {
-            const char *mat  = cJSON_GetStringValue(cJSON_GetObjectItem(j, "matricola")) ?: "";
-            const char *nome = cJSON_GetStringValue(cJSON_GetObjectItem(j, "nome"))      ?: "";
-            const char *cog  = cJSON_GetStringValue(cJSON_GetObjectItem(j, "cognome"))   ?: "";
-            for (int i = 0; i < s_list.count; i++) {
+        if (strcmp(op, "login") == 0)
+        {
+            const char *mat = cJSON_GetStringValue(cJSON_GetObjectItem(j, "matricola")) ?: "";
+            const char *nome = cJSON_GetStringValue(cJSON_GetObjectItem(j, "nome")) ?: "";
+            const char *cog = cJSON_GetStringValue(cJSON_GetObjectItem(j, "cognome")) ?: "";
+            for (int i = 0; i < s_list.count; i++)
+            {
                 snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola), "%s", mat);
-                snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore), "%s %s", nome, cog);
+                snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore), "%.30s %.30s", nome, cog);
                 s_list.items[i].sessione_aperta = true;
                 s_list.items[i].qta_prod_sessione = 0;
             }
-        } else if (strcmp(op, "logout") == 0) {
-            for (int i = 0; i < s_list.count; i++) {
+        }
+        else if (strcmp(op, "logout") == 0)
+        {
+            for (int i = 0; i < s_list.count; i++)
+            {
                 s_list.items[i].sessione_aperta = false;
                 s_list.items[i].matricola[0] = '\0';
                 s_list.items[i].operatore[0] = '\0';
                 s_list.items[i].qta_prod_sessione = 0;
             }
-        } else if (strcmp(op, "versa") == 0) {
+        }
+        else if (strcmp(op, "versa") == 0)
+        {
             int qta = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "qta"));
-            for (int i = 0; i < s_list.count; i++) {
+            for (int i = 0; i < s_list.count; i++)
+            {
                 uint32_t qta_reale = (uint32_t)qta * s_list.items[i].qta_pezzi;
-                s_list.items[i].qta_scatola       += qta_reale;
-                s_list.items[i].qta_prod_fase     += qta_reale;
+                s_list.items[i].qta_scatola += qta_reale;
+                s_list.items[i].qta_prod_fase += qta_reale;
                 s_list.items[i].qta_prod_sessione += qta_reale;
             }
-        } else if (strcmp(op, "barcode") == 0) {
+        }
+        else if (strcmp(op, "barcode") == 0)
+        {
             const char *bc = cJSON_GetStringValue(cJSON_GetObjectItem(j, "barcode")) ?: "";
             banchetto_data_t *d = &s_list.items[idx];
             if (strncmp(d->matr_scatola_corrente, bc, 31) != 0)
                 d->qta_scatola = 0;
-            strncpy(d->matr_scatola_corrente, bc, sizeof(d->matr_scatola_corrente) - 1);
+            snprintf(d->matr_scatola_corrente, sizeof(d->matr_scatola_corrente), "%s", bc);
         }
-        // scarto: nessun aggiornamento contatori locali
 
         cJSON_Delete(j);
     }
@@ -391,12 +442,16 @@ void banchetto_manager_reconstruct_from_journal(void)
 
 static void periodic_refresh_task(void *pvParameters)
 {
-    while (1) {
+    while (1)
+    {
         vTaskDelay(pdMS_TO_TICKS(60 * 60 * 1000)); // 1 ora
-        if (is_online()) {
+        if (is_online())
+        {
             ESP_LOGI(TAG, "Refresh periodico cache SD...");
             banchetto_manager_fetch_from_server();
-        } else {
+        }
+        else
+        {
             ESP_LOGW(TAG, "Refresh periodico saltato (offline)");
         }
     }
@@ -522,115 +577,8 @@ bool banchetto_manager_get_item(uint8_t index, banchetto_data_t *out_data)
 }
 
 // ═══════════════════════════════════════════════════════════
-// VERSA — loop su tutti gli articoli
+// VERSA
 // ═══════════════════════════════════════════════════════════
-
-// bool banchetto_manager_versa(uint32_t qta)
-// {
-//     ESP_LOGI(TAG, "Versa: %lu", qta);
-
-//     if (!xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-//         return false;
-
-//     if (!s_list.items[0].sessione_aperta)
-//     {
-//         ESP_LOGW(TAG, "Sessione NON aperta");
-//         xSemaphoreGive(data_mutex);
-//         return false;
-//     }
-
-//     banchetto_data_t *cur = &s_list.items[s_current_idx];
-//     if (cur->matr_scatola_corrente[0] == '\0')
-//     {
-//         ESP_LOGW(TAG, "Scatola non impostata su articolo %d", s_current_idx);
-//         xSemaphoreGive(data_mutex);
-//         return false;
-//     }
-//     xSemaphoreGive(data_mutex);
-
-//     bool all_ok = true;
-//     char contenitori_pieni[256] = {0};
-
-//     for (int i = 0; i < s_list.count; i++)
-//     {
-//         if (!xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-//         {
-//             all_ok = false;
-//             continue;
-//         }
-
-//         uint32_t qta_parziale = s_list.items[i].qta_prod_fase;
-//         uint32_t qta_pezzi = s_list.items[i].qta_pezzi;
-//         uint32_t ord_prod = s_list.items[i].ord_prod;
-//         xSemaphoreGive(data_mutex);
-
-//         uint32_t qta_reale = qta * qta_pezzi;
-//         char url[512];
-//         snprintf(url, sizeof(url), "%s?key=%s&comando=versa&qta=%lu&qta_parziale=%lu&ord_prod=%lu",
-//                  SERVER_URL, device_key, qta_reale, qta_parziale, ord_prod);
-
-//         int response_code = 0;
-//         char *response_body = NULL;
-//         esp_err_t ret = http_get_request(url, &response_code, &response_body);
-//         if (response_body)
-//             free(response_body);
-
-//         if (ret != ESP_OK || response_code != 200)
-//         {
-//             ESP_LOGE(TAG, "[%d] Errore HTTP versa (code: %d)", i, response_code);
-//             all_ok = false;
-//             continue;
-//         }
-
-//         if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-//         {
-//             banchetto_data_t *item = &s_list.items[i];
-//             item->qta_scatola += qta_reale;
-//             item->qta_prod_fase += qta_reale;
-//             item->qta_prod_sessione += qta_reale;
-//             item->qta_totale_giornaliera += qta_reale;
-
-//             // Controlla se contenitore pieno dopo il versamento
-//             if (item->qta_scatola >= item->qta_totale_scatola)
-//             {
-//                 char tmp[64];
-//                 snprintf(tmp, sizeof(tmp), "%s%s",
-//                          contenitori_pieni[0] ? "\n" : "",
-//                          item->codice_articolo);
-//                 strncat(contenitori_pieni, tmp, sizeof(contenitori_pieni) - strlen(contenitori_pieni) - 1);
-//             }
-
-//             ESP_LOGI(TAG, "[%d] Versamento OK — scatola:%lu/%lu fase:%lu sess:%lu",
-//                      i, item->qta_scatola, item->qta_totale_scatola,
-//                      item->qta_prod_fase, item->qta_prod_sessione);
-//             xSemaphoreGive(data_mutex);
-//         }
-//     }
-
-//     if (all_ok)
-//     {
-//         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
-//         {
-//             app_banchetto_update_page2();
-
-//             if (contenitori_pieni[0])
-//             {
-//                 char msg[320];
-//                 snprintf(msg, sizeof(msg),
-//                          "Il contenitore del codice:\n%s\ne' pieno!\nCambiare il contenitore!",
-//                          contenitori_pieni);
-//                 popup_avviso_open(LV_SYMBOL_WARNING " Contenitore Pieno", msg);
-//             }
-
-//             lvgl_port_unlock();
-//         }
-//         myBeep();
-//         visual_feedback_ok();
-//         web_server_broadcast_update();
-//     }
-
-//     return all_ok;
-// }
 
 bool banchetto_manager_versa(uint32_t qta)
 {
@@ -643,14 +591,13 @@ bool banchetto_manager_versa(uint32_t qta)
     {
         ESP_LOGW(TAG, "Sessione NON aperta");
         xSemaphoreGive(data_mutex);
-         if (!s_list.items[0].sessione_aperta)
-            {
-                bsp_display_lock(0);
-                popup_avviso_open(LV_SYMBOL_WARNING " Timbratura mancante",
-                                  "Effettuare il login con\nil badge prima di continuare.",
-                                  !is_online());
-                bsp_display_unlock();
-            }
+        if (lvgl_port_lock(0))
+        {
+            popup_avviso_open(LV_SYMBOL_WARNING " Timbratura mancante",
+                              "Effettuare il login con\nil badge prima di continuare.",
+                              !is_online());
+            lvgl_port_unlock();
+        }
         return false;
     }
 
@@ -663,16 +610,13 @@ bool banchetto_manager_versa(uint32_t qta)
     }
     xSemaphoreGive(data_mutex);
 
-    // Effettua una singola chiamata al server con la quantità versata
     char url[512];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=versa&qta=%lu",
-             SERVER_URL, device_key, qta);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=versa&qta=%lu", SERVER_URL, device_key, qta);
 
     if (!is_online())
     {
         ESP_LOGW(TAG, "OFFLINE — versa accodata: qta=%lu", qta);
         journal_op("versa", s_current_idx, url, (int)qta, NULL, NULL, NULL, NULL);
-        // Lo stato locale viene aggiornato sotto normalmente
     }
     else
     {
@@ -684,17 +628,17 @@ bool banchetto_manager_versa(uint32_t qta)
 
         if (ret != ESP_OK || response_code != 200)
         {
-            ESP_LOGE(TAG, "Errore HTTP versa (code: %d)", response_code);
-            return false;
+            ESP_LOGW(TAG, "Errore HTTP versa, fallback a OFFLINE");
+            journal_op("versa", s_current_idx, url, (int)qta, NULL, NULL, NULL, NULL);
         }
     }
 
     bool all_ok = true;
     char contenitori_pieni[256] = {0};
 
-    for (int i = 0; i < s_list.count; i++)
+    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
     {
-        if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+        for (int i = 0; i < s_list.count; i++)
         {
             banchetto_data_t *item = &s_list.items[i];
             uint32_t qta_reale = qta * item->qta_pezzi;
@@ -704,25 +648,25 @@ bool banchetto_manager_versa(uint32_t qta)
             item->qta_prod_sessione += qta_reale;
             item->qta_totale_giornaliera += qta_reale;
 
-            // Controlla se contenitore pieno dopo il versamento
             if (item->qta_scatola >= item->qta_totale_scatola)
             {
                 char tmp[64];
-                snprintf(tmp, sizeof(tmp), "%s%s",
-                         contenitori_pieni[0] ? "\n" : "",
-                         item->codice_articolo);
-                strncat(contenitori_pieni, tmp, sizeof(contenitori_pieni) - strlen(contenitori_pieni) - 1);
+                snprintf(tmp, sizeof(tmp), "%s%s", contenitori_pieni[0] ? "\n" : "", item->codice_articolo);
+                if (strlen(contenitori_pieni) + strlen(tmp) < sizeof(contenitori_pieni))
+                {
+                    strcat(contenitori_pieni, tmp);
+                }
             }
 
             ESP_LOGI(TAG, "[%d] Versamento OK — scatola:%lu/%lu fase:%lu sess:%lu",
                      i, item->qta_scatola, item->qta_totale_scatola,
                      item->qta_prod_fase, item->qta_prod_sessione);
-            xSemaphoreGive(data_mutex);
         }
-        else
-        {
-            all_ok = false;
-        }
+        xSemaphoreGive(data_mutex);
+    }
+    else
+    {
+        all_ok = false;
     }
 
     if (all_ok)
@@ -730,29 +674,25 @@ bool banchetto_manager_versa(uint32_t qta)
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
             app_banchetto_update_page2();
-
             if (contenitori_pieni[0])
             {
                 char msg[320];
-                snprintf(msg, sizeof(msg),
-                         "Il contenitore del codice:\n%s\ne' pieno!\nCambiare il contenitore!",
-                         contenitori_pieni);
+                snprintf(msg, sizeof(msg), "Il contenitore del codice e' pieno!:\n%s\nCambiare il contenitore!", contenitori_pieni);
                 popup_avviso_open(LV_SYMBOL_WARNING " Contenitore Pieno", msg, !is_online());
             }
-
             lvgl_port_unlock();
         }
         deep_sleep_reset_timer();
         myBeep();
         visual_feedback_ok();
         web_server_broadcast_update();
-
     }
 
     return all_ok;
 }
+
 // ═══════════════════════════════════════════════════════════
-// SCARTO — loop su tutti gli articoli
+// SCARTO
 // ═══════════════════════════════════════════════════════════
 
 bool banchetto_manager_scarto(uint32_t qta_scarti)
@@ -763,10 +703,7 @@ bool banchetto_manager_scarto(uint32_t qta_scarti)
         return false;
 
     if (!xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-    {
-        ESP_LOGE(TAG, "Timeout mutex");
         return false;
-    }
     if (!s_list.items[0].sessione_aperta)
     {
         ESP_LOGW(TAG, "Sessione NON aperta");
@@ -777,45 +714,47 @@ bool banchetto_manager_scarto(uint32_t qta_scarti)
     xSemaphoreGive(data_mutex);
 
     char url[256];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=scarto&qta=%lu&ord_prod=%lu",
-             SERVER_URL, device_key, qta_scarti, ord_prod);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=scarto&qta=%lu&ord_prod=%lu", SERVER_URL, device_key, qta_scarti, ord_prod);
 
     if (!is_online())
     {
-        ESP_LOGW(TAG, "OFFLINE — scarto accodato: qta=%lu ord=%lu", qta_scarti, ord_prod);
+        ESP_LOGW(TAG, "OFFLINE — scarto accodato");
         journal_op("scarto", s_current_idx, url, (int)qta_scarti, NULL, NULL, NULL, NULL);
-        return true;
     }
-
-    int response_code = 0;
-    char *response_body = NULL;
-    esp_err_t ret = http_get_request(url, &response_code, &response_body);
-
-    if (ret != ESP_OK || response_code != 200)
+    else
     {
-        if (response_body)
+        int response_code = 0;
+        char *response_body = NULL;
+        esp_err_t ret = http_get_request(url, &response_code, &response_body);
+
+        if (ret != ESP_OK || response_code != 200)
+        {
+            if (response_body)
+                free(response_body);
+            ESP_LOGW(TAG, "Errore HTTP scarto, fallback a OFFLINE");
+            journal_op("scarto", s_current_idx, url, (int)qta_scarti, NULL, NULL, NULL, NULL);
+        }
+        else
+        {
+            cJSON *json = cJSON_Parse(response_body);
             free(response_body);
-        return false;
+            if (json)
+            {
+                cJSON *ok_item = cJSON_GetObjectItem(json, "OK");
+                bool ok = false;
+                if (ok_item)
+                {
+                    if (cJSON_IsNumber(ok_item))
+                        ok = (ok_item->valueint > 0);
+                    else if (cJSON_IsString(ok_item))
+                        ok = (atoi(ok_item->valuestring) > 0);
+                }
+                cJSON_Delete(json);
+                if (!ok)
+                    return false;
+            }
+        }
     }
-
-    cJSON *json = cJSON_Parse(response_body);
-    free(response_body);
-    if (!json)
-        return false;
-
-    cJSON *ok_item = cJSON_GetObjectItem(json, "OK");
-    bool ok = false;
-    if (ok_item)
-    {
-        if (cJSON_IsNumber(ok_item))
-            ok = (ok_item->valueint > 0);
-        else if (cJSON_IsString(ok_item))
-            ok = (atoi(ok_item->valuestring) > 0);
-    }
-    cJSON_Delete(json);
-
-    if (!ok)
-        return false;
 
     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
     {
@@ -836,63 +775,11 @@ bool banchetto_manager_scarto(uint32_t qta_scarti)
 
     return true;
 }
-// ═══════════════════════════════════════════════════════════
-// SET BARCODE — solo articolo corrente
-// ═══════════════════════════════════════════════════════════
-
-// void banchetto_manager_set_barcode(const char *barcode)
-// {
-//     if (!barcode) return;
-
-//     ESP_LOGI(TAG, "Scatola [idx=%d]: %s", s_current_idx, barcode);
-
-//     char url[256];
-//     snprintf(url, sizeof(url), "%s?key=%s&comando=scatola&scatola=%s&ord_prod=%lu",
-//              SERVER_URL, device_key, barcode,
-//              s_list.items[s_current_idx].ord_prod);
-
-//     int   response_code = 0;
-//     char *response_body = NULL;
-//     esp_err_t ret = http_get_request(url, &response_code, &response_body);
-
-//     if (ret != ESP_OK || response_code != 200) {
-//         if (response_body) free(response_body);
-//         return;
-//     }
-
-//     cJSON *json = cJSON_Parse(response_body);
-//     free(response_body);
-//     if (!json) return;
-
-//     cJSON *ok_item = cJSON_GetObjectItem(json, "OK");
-//     bool ok = (ok_item && cJSON_IsNumber(ok_item) && ok_item->valueint == 1);
-//     cJSON_Delete(json);
-//     if (!ok) return;
-
-//     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000))) {
-//         banchetto_data_t *item = &s_list.items[s_current_idx];
-
-//         if (strncmp(item->matr_scatola_corrente, barcode, 31) != 0)
-//             item->qta_scatola = 0;
-
-//         strncpy(item->matr_scatola_corrente, barcode, sizeof(item->matr_scatola_corrente) - 1);
-//         item->matr_scatola_corrente[sizeof(item->matr_scatola_corrente) - 1] = '\0';
-
-//         ESP_LOGI(TAG, "[%d] Scatola: %s (%lu/%lu)", s_current_idx,
-//                  item->matr_scatola_corrente, item->qta_scatola, item->qta_totale_scatola);
-
-//         if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
-//             app_banchetto_update_page2();
-//             lvgl_port_unlock();
-//         }
-//         xSemaphoreGive(data_mutex);
-//         web_server_broadcast_update();
-//     }
-// }
 
 // ═══════════════════════════════════════════════════════════
-// LOGIN BADGE
+// SET BARCODE
 // ═══════════════════════════════════════════════════════════
+
 void banchetto_manager_set_barcode(const char *barcode)
 {
     if (!barcode)
@@ -902,212 +789,80 @@ void banchetto_manager_set_barcode(const char *barcode)
 
     char url[256];
     snprintf(url, sizeof(url), "%s?key=%s&comando=scatola&scatola=%s&ord_prod=%lu",
-             SERVER_URL, device_key, barcode,
-             s_list.items[s_current_idx].ord_prod);
+             SERVER_URL, device_key, barcode, s_list.items[s_current_idx].ord_prod);
 
     if (!is_online())
     {
-        ESP_LOGW(TAG, "OFFLINE — scatola accodata: %s", barcode);
+        ESP_LOGW(TAG, "OFFLINE — scatola accodata");
         journal_op("barcode", s_current_idx, url, 0, NULL, NULL, NULL, barcode);
-        // Aggiorna stato locale
+
         if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
         {
             banchetto_data_t *item = &s_list.items[s_current_idx];
             if (strncmp(item->matr_scatola_corrente, barcode, 31) != 0)
                 item->qta_scatola = 0;
-            strncpy(item->matr_scatola_corrente, barcode, sizeof(item->matr_scatola_corrente) - 1);
+            snprintf(item->matr_scatola_corrente, sizeof(item->matr_scatola_corrente), "%s", barcode);
             xSemaphoreGive(data_mutex);
         }
-        return;
     }
-
-    int response_code = 0;
-    char *response_body = NULL;
-    esp_err_t ret = http_get_request(url, &response_code, &response_body);
-
-    if (ret != ESP_OK || response_code != 200)
+    else
     {
+        int response_code = 0;
+        char *response_body = NULL;
+        esp_err_t ret = http_get_request(url, &response_code, &response_body);
+
+        if (ret == ESP_OK && response_code == 200 && response_body != NULL)
+        {
+            cJSON *json = cJSON_Parse(response_body);
+            if (json)
+            {
+                cJSON *ok_item = cJSON_GetObjectItem(json, "OK");
+                bool ok = (ok_item && cJSON_IsNumber(ok_item) && ok_item->valueint == 1);
+
+                if (ok)
+                {
+                    cJSON *qta_scatola_item = cJSON_GetObjectItem(json, "qta_scatola");
+                    uint32_t qta_scatola = (qta_scatola_item && cJSON_IsNumber(qta_scatola_item)) ? qta_scatola_item->valueint : 0;
+
+                    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+                    {
+                        banchetto_data_t *item = &s_list.items[s_current_idx];
+                        snprintf(item->matr_scatola_corrente, sizeof(item->matr_scatola_corrente), "%s", barcode);
+                        item->qta_scatola = qta_scatola;
+                        xSemaphoreGive(data_mutex);
+                    }
+                }
+                cJSON_Delete(json);
+            }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Errore HTTP scatola, fallback a OFFLINE");
+            journal_op("barcode", s_current_idx, url, 0, NULL, NULL, NULL, barcode);
+            if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+            {
+                banchetto_data_t *item = &s_list.items[s_current_idx];
+                if (strncmp(item->matr_scatola_corrente, barcode, 31) != 0)
+                    item->qta_scatola = 0;
+                snprintf(item->matr_scatola_corrente, sizeof(item->matr_scatola_corrente), "%s", barcode);
+                xSemaphoreGive(data_mutex);
+            }
+        }
         if (response_body)
             free(response_body);
-        return;
     }
 
-    // cJSON *json = cJSON_Parse(response_body);
-    // free(response_body);
-    // if (!json)
-    //     return;
-
-    // cJSON *ok_item = cJSON_GetObjectItem(json, "OK");
-    // bool ok = (ok_item && cJSON_IsNumber(ok_item) && ok_item->valueint == 1);
-    // cJSON_Delete(json);
-    // if (!ok)
-    //     return;
-
-    // if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-    // {
-    //     banchetto_data_t *item = &s_list.items[s_current_idx];
-
-    //     if (strncmp(item->matr_scatola_corrente, barcode, 31) != 0)
-    //         item->qta_scatola = 0;
-
-    //     strncpy(item->matr_scatola_corrente, barcode, sizeof(item->matr_scatola_corrente) - 1);
-    //     item->matr_scatola_corrente[sizeof(item->matr_scatola_corrente) - 1] = '\0';
-
-    //     ESP_LOGI(TAG, "[%d] Scatola: %s (%lu/%lu)", s_current_idx,
-    //              item->matr_scatola_corrente, item->qta_scatola, item->qta_totale_scatola);
-
-    //     xSemaphoreGive(data_mutex);
-    // ...
-
-    cJSON *json = cJSON_Parse(response_body);
-    free(response_body);
-    if (!json)
-        return;
-
-    cJSON *ok_item = cJSON_GetObjectItem(json, "OK");
-    bool ok = (ok_item && cJSON_IsNumber(ok_item) && ok_item->valueint == 1);
-
-    cJSON *qta_scatola_item = cJSON_GetObjectItem(json, "qta_scatola");
-    uint32_t qta_scatola = (qta_scatola_item && cJSON_IsNumber(qta_scatola_item)) ? qta_scatola_item->valueint : 0;
-
-    cJSON_Delete(json);
-    if (!ok)
-        return;
-
-    if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+    if (lvgl_port_lock(pdMS_TO_TICKS(100)))
     {
-        banchetto_data_t *item = &s_list.items[s_current_idx];
-
-        strncpy(item->matr_scatola_corrente, barcode, sizeof(item->matr_scatola_corrente) - 1);
-        item->matr_scatola_corrente[sizeof(item->matr_scatola_corrente) - 1] = '\0';
-
-        item->qta_scatola = qta_scatola;
-
-        ESP_LOGI(TAG, "[%d] Scatola: %s (%lu/%lu)", s_current_idx,
-                 item->matr_scatola_corrente, item->qta_scatola, item->qta_totale_scatola);
-
-        xSemaphoreGive(data_mutex);
-
-        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
-        {
-            app_banchetto_update_page2();
-            lvgl_port_unlock();
-        }
-        web_server_broadcast_update();
+        app_banchetto_update_page2();
+        lvgl_port_unlock();
     }
+    web_server_broadcast_update();
 }
-// esp_err_t banchetto_manager_login_badge(const char *badge)
-// {
-//     if (!badge || strlen(badge) == 0)
-//         return ESP_FAIL;
-
-//     switch (s_state)
-//     {
-//     case BANCHETTO_STATE_CONTROLLO:
-//         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
-//         return banchetto_manager_controllo(badge);
-//     default:
-//         break;
-//     }
-
-//     ESP_LOGI(TAG, "Badge: %s", badge);
-
-//     char url[256];
-//     snprintf(url, sizeof(url), "%s?key=%s&comando=badge&badge=%s",
-//              SERVER_URL, device_key, badge);
-
-//     int response_code = 0;
-//     char *response_body = NULL;
-//     esp_err_t ret = http_get_request(url, &response_code, &response_body);
-
-//     if (ret != ESP_OK || response_code != 200)
-//     {
-//         ESP_LOGE(TAG, "Errore HTTP: %s (code: %d)", esp_err_to_name(ret), response_code);
-//         if (response_body)
-//             free(response_body);
-//         return ESP_FAIL;
-//     }
-
-//     badge_response_t badge_resp;
-//     if (parse_badge_response(response_body, &badge_resp) != ESP_OK)
-//     {
-//         ESP_LOGE(TAG, "Errore parsing risposta badge");
-//         if (response_body)
-//             free(response_body);
-//         return ESP_FAIL;
-//     }
-//     free(response_body);
-
-//     // ── LOGOUT ───────────────────────────────────────────────
-//     if (badge_resp.matricola == 0)
-//     {
-//         if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-//         {
-//             for (int i = 0; i < s_list.count; i++)
-//             {
-//                 s_list.items[i].sessione_aperta = false;
-//                 s_list.items[i].operatore[0] = '\0';
-//                 s_list.items[i].matricola[0] = '\0';
-//                 s_list.items[i].qta_prod_sessione = 0;
-//             }
-//             xSemaphoreGive(data_mutex);
-//             banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
-//             ESP_LOGI(TAG, "Sessione CHIUSA");
-//             myBeep();
-//             if (lvgl_port_lock(pdMS_TO_TICKS(100)))
-//             {
-//                 app_banchetto_update_page1();
-//                 app_banchetto_update_page2();
-//                 lvgl_port_unlock();
-//             }
-//             web_server_broadcast_update();
-//             return ESP_OK;
-//         }
-//         return ESP_FAIL;
-//     }
-
-//     if (!badge_resp.success)
-//     {
-//         ESP_LOGE(TAG, "Login FALLITO: %s", badge_resp.errore);
-//         myBeep();
-//         vTaskDelay(pdMS_TO_TICKS(200));
-//         myBeep();
-//         return ESP_FAIL;
-//     }
-
-//     // ── LOGIN ────────────────────────────────────────────────
-//     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
-//     {
-//         for (int i = 0; i < s_list.count; i++)
-//         {
-//             snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore),
-//                      "%s", badge_resp.operatore);
-//             snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola),
-//                      "%d", badge_resp.matricola);
-//             s_list.items[i].sessione_aperta = true;
-//             s_list.items[i].qta_prod_sessione = 0;
-//         }
-//         xSemaphoreGive(data_mutex);
-//         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
-//         ESP_LOGI(TAG, "Login OK — Operatore: %s mat:%s",
-//                  badge_resp.operatore, s_list.items[0].matricola);
-//         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
-//         {
-//             app_banchetto_update_page1();
-//             app_banchetto_update_page2();
-//             lvgl_port_unlock();
-//         }
-//         myBeep();
-//         web_server_broadcast_update();
-//         return ESP_OK;
-//     }
-//     return ESP_FAIL;
-// }
 
 // ═══════════════════════════════════════════════════════════
-// CONTROLLO
+// LOGIN BADGE
 // ═══════════════════════════════════════════════════════════
-
 esp_err_t banchetto_manager_login_badge(const char *badge)
 {
     if (!badge || strlen(badge) == 0)
@@ -1134,31 +889,31 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
     ESP_LOGI(TAG, "Badge: %s", badge);
 
     char url[256];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=badge&badge=%s",
-             SERVER_URL, device_key, badge);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=badge&badge=%s", SERVER_URL, device_key, badge);
 
-    // ── OFFLINE: usa cache locale ─────────────────────────
-    if (!is_online()) {
-        char matricola[16] = {0};
-        char nome[48]      = {0};
-        char cognome[48]   = {0};
+    if (!is_online())
+    {
+        char mat[16] = {0};
+        char n[48] = {0};
+        char c[48] = {0};
 
-        if (!badge_cache_find(badge, matricola, sizeof(matricola),
-                              nome, sizeof(nome), cognome, sizeof(cognome))) {
-            if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
-                popup_avviso_open(LV_SYMBOL_WARNING " Badge non riconosciuto",
-                                  "Badge non presente in cache.\nConnettiti alla rete almeno una volta.", true);
+        if (!badge_cache_find(badge, mat, sizeof(mat), n, sizeof(n), c, sizeof(c)))
+        {
+            if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+            {
+                popup_avviso_open(LV_SYMBOL_WARNING " Badge non riconosciuto", "Badge non presente in cache.\nConnettiti alla rete almeno una volta.", true);
                 lvgl_port_unlock();
             }
             return ESP_FAIL;
         }
 
-        // Logout se stessa matricola già loggata
-        if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000))) {
-            bool same_op = s_list.items[0].sessione_aperta &&
-                           atoi(s_list.items[0].matricola) == atoi(matricola);
-            if (same_op) {
-                for (int i = 0; i < s_list.count; i++) {
+        if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+        {
+            bool same_op = s_list.items[0].sessione_aperta && atoi(s_list.items[0].matricola) == atoi(mat);
+            if (same_op)
+            {
+                for (int i = 0; i < s_list.count; i++)
+                {
                     s_list.items[i].sessione_aperta = false;
                     s_list.items[i].operatore[0] = '\0';
                     s_list.items[i].matricola[0] = '\0';
@@ -1166,8 +921,9 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
                 }
                 xSemaphoreGive(data_mutex);
                 banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
-                journal_op("logout", 0, url, 0, matricola, NULL, NULL, NULL);
-                if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+                journal_op("logout", 0, url, 0, mat, NULL, NULL, NULL);
+                if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+                {
                     app_banchetto_update_page1();
                     app_banchetto_update_page2();
                     lvgl_port_unlock();
@@ -1178,13 +934,13 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
             xSemaphoreGive(data_mutex);
         }
 
-        // Controlla formazione
         const char *cod_art = s_list.items[s_current_idx].codice_articolo;
-        if (!badge_cache_is_formato(matricola, cod_art)) {
-            if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+        if (!badge_cache_is_formato(mat, cod_art))
+        {
+            if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+            {
                 char msg[128];
-                snprintf(msg, sizeof(msg),
-                         "Non hai la formazione\nsul codice %s.\nChiama il responsabile.", cod_art);
+                snprintf(msg, sizeof(msg), "Non hai la formazione\nsul codice %s.\nChiama il responsabile.", cod_art);
                 popup_formazione_open("Formazione mancante", msg);
                 lvgl_port_unlock();
             }
@@ -1194,22 +950,23 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
             return ESP_FAIL;
         }
 
-        // Login offline
-        if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000))) {
-            for (int i = 0; i < s_list.count; i++) {
-                snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore), "%s", matricola);
-                snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola), "%s", matricola);
+        if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
+        {
+            for (int i = 0; i < s_list.count; i++)
+            {
+                snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore), "%.30s %.30s", n, c);
+                snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola), "%s", mat);
                 s_list.items[i].sessione_aperta = true;
                 s_list.items[i].qta_prod_sessione = 0;
             }
             xSemaphoreGive(data_mutex);
         }
 
-        journal_op("login", s_current_idx, url, 0, NULL, nome, cognome, NULL);
+        journal_op("login", s_current_idx, url, 0, NULL, n, c, NULL);
         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
-        ESP_LOGI(TAG, "Login OFFLINE OK — mat:%s (%s %s)", matricola, nome, cognome);
 
-        if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+        if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+        {
             app_banchetto_update_page1();
             app_banchetto_update_page2();
             lvgl_port_unlock();
@@ -1219,14 +976,12 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
         return ESP_OK;
     }
 
-    // ── ONLINE: chiamata al server ────────────────────────
     int response_code = 0;
     char *response_body = NULL;
     esp_err_t ret = http_get_request(url, &response_code, &response_body);
 
     if (ret != ESP_OK || response_code != 200)
     {
-        ESP_LOGE(TAG, "Errore HTTP: %s (code: %d)", esp_err_to_name(ret), response_code);
         if (response_body)
             free(response_body);
         return ESP_FAIL;
@@ -1235,16 +990,13 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
     badge_response_t badge_resp;
     if (parse_badge_response(response_body, &badge_resp) != ESP_OK)
     {
-        ESP_LOGE(TAG, "Errore parsing risposta badge");
         if (response_body)
             free(response_body);
         return ESP_FAIL;
     }
 
-    // ── ERRORE SERVER (badge non trovato, etc.) ──────────
     if (badge_resp.errore[0] != '\0')
     {
-        ESP_LOGE(TAG, "Errore badge dal server: %s", badge_resp.errore);
         free(response_body);
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
@@ -1255,42 +1007,31 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
         return ESP_FAIL;
     }
 
-    // ── FORMAZIONE MANCANTE ──────────────────────────────
     if (badge_resp.formazione == 999)
     {
-        ESP_LOGW(TAG, "Operatore %d: formazione mancante", badge_resp.matricola);
-
-        // Recupera cod_art dalla risposta JSON per mostrarlo nel popup
         cJSON *json = cJSON_Parse(response_body);
         if (json)
         {
             cJSON *cod = cJSON_GetObjectItem(json, "cod_art");
             if (cod && cJSON_IsString(cod) && cod->valuestring)
             {
-                strncpy(s_formazione_cod_art, cod->valuestring, sizeof(s_formazione_cod_art) - 1);
-                s_formazione_cod_art[sizeof(s_formazione_cod_art) - 1] = '\0';
+                snprintf(s_formazione_cod_art, sizeof(s_formazione_cod_art), "%s", cod->valuestring);
             }
             else
             {
-                strncpy(s_formazione_cod_art, "sconosciuto", sizeof(s_formazione_cod_art) - 1);
+                snprintf(s_formazione_cod_art, sizeof(s_formazione_cod_art), "sconosciuto");
             }
             cJSON_Delete(json);
         }
         free(response_body);
 
-        // Salva badge operatore per riutilizzarlo al passo 3
-        strncpy(s_formazione_badge, badge, sizeof(s_formazione_badge) - 1);
-        s_formazione_badge[sizeof(s_formazione_badge) - 1] = '\0';
-
+        snprintf(s_formazione_badge, sizeof(s_formazione_badge), "%s", badge);
         banchetto_manager_set_state(BANCHETTO_STATE_ATTESA_FORMATORE);
 
-        // Apri popup formazione (va chiamato con LVGL lock)
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
             char msg[128];
-            snprintf(msg, sizeof(msg),
-                     "Non hai la formazione\nsul codice %s.\nChiama il responsabile.",
-                     s_formazione_cod_art);
+            snprintf(msg, sizeof(msg), "Non hai la formazione\nsul codice %s.\nChiama il responsabile.", s_formazione_cod_art);
             popup_formazione_open("Formazione mancante", msg);
             lvgl_port_unlock();
         }
@@ -1303,7 +1044,6 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
 
     free(response_body);
 
-    // ── LOGOUT ───────────────────────────────────────────
     if (badge_resp.matricola == 0)
     {
         if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
@@ -1317,7 +1057,6 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
             }
             xSemaphoreGive(data_mutex);
             banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
-            ESP_LOGI(TAG, "Sessione CHIUSA");
             myBeep();
             if (lvgl_port_lock(pdMS_TO_TICKS(100)))
             {
@@ -1333,29 +1072,24 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
 
     if (!badge_resp.success)
     {
-        ESP_LOGE(TAG, "Login FALLITO: %s", badge_resp.errore);
         myBeep();
         vTaskDelay(pdMS_TO_TICKS(200));
         myBeep();
         return ESP_FAIL;
     }
 
-    // ── LOGIN ────────────────────────────────────────────
     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
     {
         for (int i = 0; i < s_list.count; i++)
         {
-            snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore),
-                     "%s", badge_resp.operatore);
-            snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola),
-                     "%d", badge_resp.matricola);
+            snprintf(s_list.items[i].operatore, sizeof(s_list.items[i].operatore), "%s", badge_resp.operatore);
+            snprintf(s_list.items[i].matricola, sizeof(s_list.items[i].matricola), "%d", badge_resp.matricola);
             s_list.items[i].sessione_aperta = true;
             s_list.items[i].qta_prod_sessione = 0;
         }
         xSemaphoreGive(data_mutex);
         banchetto_manager_set_state(BANCHETTO_STATE_CONTEGGIO);
-        ESP_LOGI(TAG, "Login OK — Operatore: %s mat:%s",
-                 badge_resp.operatore, s_list.items[0].matricola);
+
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
             app_banchetto_update_page1();
@@ -1370,7 +1104,7 @@ esp_err_t banchetto_manager_login_badge(const char *badge)
 }
 
 // ═══════════════════════════════════════════════════════════
-// FORMAZIONE FORMATORE — Step 2: badge del formatore
+// FORMAZIONE FORMATORE
 // ═══════════════════════════════════════════════════════════
 
 esp_err_t banchetto_manager_formazione_formatore(const char *badge)
@@ -1378,11 +1112,8 @@ esp_err_t banchetto_manager_formazione_formatore(const char *badge)
     if (!badge || strlen(badge) == 0)
         return ESP_ERR_INVALID_ARG;
 
-    ESP_LOGI(TAG, "Formazione formatore — badge: %s", badge);
-
     char url[256];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=formazione_formatore&badge=%s",
-             SERVER_URL, device_key, badge);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=formazione_formatore&badge=%s", SERVER_URL, device_key, badge);
 
     int response_code = 0;
     char *body = NULL;
@@ -1390,13 +1121,11 @@ esp_err_t banchetto_manager_formazione_formatore(const char *badge)
 
     if (ret != ESP_OK || response_code != 200)
     {
-        ESP_LOGE(TAG, "Errore HTTP formazione formatore (code: %d)", response_code);
         if (body)
             free(body);
         return ESP_FAIL;
     }
 
-    // Parsa risposta
     bool ok = false;
     char msg_errore[64] = {0};
 
@@ -1407,13 +1136,9 @@ esp_err_t banchetto_manager_formazione_formatore(const char *badge)
         if (risp && cJSON_IsString(risp) && risp->valuestring)
         {
             if (strcmp(risp->valuestring, "Ok del formatore") == 0)
-            {
                 ok = true;
-            }
             else
-            {
-                strncpy(msg_errore, risp->valuestring, sizeof(msg_errore) - 1);
-            }
+                snprintf(msg_errore, sizeof(msg_errore), "%s", risp->valuestring);
         }
         cJSON_Delete(json);
     }
@@ -1422,16 +1147,11 @@ esp_err_t banchetto_manager_formazione_formatore(const char *badge)
 
     if (ok)
     {
-        // Formatore validato — passa a step 3
         banchetto_manager_set_state(BANCHETTO_STATE_ATTESA_CONFERMA_FORMAZIONE);
-        ESP_LOGI(TAG, "Formatore OK — attesa conferma operatore");
-
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
             popup_formazione_close();
-            popup_formazione_open(
-                "Conferma formazione",
-                "Dichiaro di avere ricevuto\nla formazione necessaria.\nConferma tramite badge.");
+            popup_formazione_open("Conferma formazione", "Dichiaro di avere ricevuto\nla formazione necessaria.\nConferma tramite badge.");
             lvgl_port_unlock();
         }
         myBeep();
@@ -1439,13 +1159,9 @@ esp_err_t banchetto_manager_formazione_formatore(const char *badge)
     }
     else
     {
-        // Non è un formatore — resta in attesa
-        ESP_LOGW(TAG, "Badge non valido come formatore: %s", msg_errore);
-
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
-            popup_avviso_open("Non sei un formatore",
-                              strlen(msg_errore) > 0 ? msg_errore : "Badge non riconosciuto\ncome formatore.", false);
+            popup_avviso_open("Non sei un formatore", strlen(msg_errore) > 0 ? msg_errore : "Badge non riconosciuto\ncome formatore.", false);
             lvgl_port_unlock();
         }
         myBeep();
@@ -1456,7 +1172,7 @@ esp_err_t banchetto_manager_formazione_formatore(const char *badge)
 }
 
 // ═══════════════════════════════════════════════════════════
-// FORMAZIONE ACCETTAZIONE — Step 3: badge operatore conferma
+// FORMAZIONE ACCETTAZIONE
 // ═══════════════════════════════════════════════════════════
 
 esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
@@ -1464,11 +1180,8 @@ esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
     if (!badge || strlen(badge) == 0)
         return ESP_ERR_INVALID_ARG;
 
-    ESP_LOGI(TAG, "Formazione accettazione — badge: %s", badge);
-
     char url[256];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=formazione_accettazione&badge=%s",
-             SERVER_URL, device_key, badge);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=formazione_accettazione&badge=%s", SERVER_URL, device_key, badge);
 
     int response_code = 0;
     char *body = NULL;
@@ -1476,7 +1189,6 @@ esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
 
     if (ret != ESP_OK || response_code != 200)
     {
-        ESP_LOGE(TAG, "Errore HTTP formazione accettazione (code: %d)", response_code);
         if (body)
             free(body);
         return ESP_FAIL;
@@ -1492,13 +1204,9 @@ esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
         if (risp && cJSON_IsString(risp) && risp->valuestring)
         {
             if (strcmp(risp->valuestring, "Formazione registrata") == 0)
-            {
                 ok = true;
-            }
             else
-            {
-                strncpy(msg_errore, risp->valuestring, sizeof(msg_errore) - 1);
-            }
+                snprintf(msg_errore, sizeof(msg_errore), "%s", risp->valuestring);
         }
         cJSON_Delete(json);
     }
@@ -1507,26 +1215,19 @@ esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
 
     if (ok)
     {
-        ESP_LOGI(TAG, "Formazione registrata — procedo con login");
-
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
             popup_formazione_close();
             lvgl_port_unlock();
         }
-
-        // Ripeti il login con il badge originale dell'operatore
         banchetto_manager_set_state(BANCHETTO_STATE_CHECKIN);
         return banchetto_manager_login_badge(s_formazione_badge);
     }
     else
     {
-        ESP_LOGW(TAG, "Formazione non accettata: %s", msg_errore);
-
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
         {
-            popup_avviso_open("Errore formazione",
-                              strlen(msg_errore) > 0 ? msg_errore : "Formazione non registrata.", false);
+            popup_avviso_open("Errore formazione", strlen(msg_errore) > 0 ? msg_errore : "Formazione non registrata.", false);
             lvgl_port_unlock();
         }
         myBeep();
@@ -1535,6 +1236,10 @@ esp_err_t banchetto_manager_formazione_accettazione(const char *badge)
         return ESP_FAIL;
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// CONTROLLO
+// ═══════════════════════════════════════════════════════════
 esp_err_t banchetto_manager_controllo(const char *badge)
 {
     if (!badge || strlen(badge) == 0)
@@ -1545,10 +1250,7 @@ esp_err_t banchetto_manager_controllo(const char *badge)
         return ESP_FAIL;
 
     char url[300];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=controllo&badge=%s&ord_prod=%lu",
-             SERVER_URL, device_key, badge, d.ord_prod);
-
-    ESP_LOGI(TAG, "GET controllo: %s", url);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=controllo&badge=%s&ord_prod=%lu", SERVER_URL, device_key, badge, (unsigned long)d.ord_prod);
 
     int response_code = 0;
     char *body = NULL;
@@ -1556,7 +1258,6 @@ esp_err_t banchetto_manager_controllo(const char *badge)
 
     if (ret != ESP_OK || response_code != 200)
     {
-        ESP_LOGE(TAG, "Errore HTTP controllo (code: %d)", response_code);
         if (body)
             free(body);
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
@@ -1598,14 +1299,9 @@ esp_err_t banchetto_manager_controllo(const char *badge)
     if (lvgl_port_lock(pdMS_TO_TICKS(100)))
     {
         popup_controllo_close();
-        popup_avviso_open(ok ? LV_SYMBOL_OK " Controllo OK"
-                             : LV_SYMBOL_WARNING " Controllo rifiutato",
-                          msg_buf, false);
+        popup_avviso_open(ok ? LV_SYMBOL_OK " Controllo OK" : LV_SYMBOL_WARNING " Controllo rifiutato", msg_buf, false);
         lvgl_port_unlock();
     }
-
-    ESP_LOGI(TAG, "Controllo %s — badge=%s ord_prod=%lu",
-             ok ? "OK" : "RIFIUTATO", badge, d.ord_prod);
     return ok ? ESP_OK : ESP_FAIL;
 }
 
@@ -1613,24 +1309,13 @@ esp_err_t banchetto_manager_controllo(const char *badge)
 // ASSEGNA BANCHETTO
 // ═══════════════════════════════════════════════════════════
 
-static void assegna_ok_btn_cb(lv_event_t *e)
-{
-    lv_obj_t *p = (lv_obj_t *)lv_event_get_user_data(e);
-    if (p)
-        lv_obj_del(p);
-    app_assegna_banchetto_close();
-}
-
 esp_err_t banchetto_manager_assegna_banchetto(const char *barcode)
 {
     if (!barcode || strlen(barcode) == 0)
         return ESP_ERR_INVALID_ARG;
 
     char url[256];
-    snprintf(url, sizeof(url), "%s?key=%s&comando=assegna&banchetto=%s",
-             SERVER_URL, device_key, barcode);
-
-    ESP_LOGI(TAG, "GET assegna banchetto: %s", url);
+    snprintf(url, sizeof(url), "%s?key=%s&comando=assegna&banchetto=%s", SERVER_URL, device_key, barcode);
 
     int response_code = 0;
     char *body = NULL;
@@ -1638,7 +1323,6 @@ esp_err_t banchetto_manager_assegna_banchetto(const char *barcode)
 
     if (ret != ESP_OK || response_code != 200)
     {
-        ESP_LOGE(TAG, "Errore HTTP assegna (code: %d)", response_code);
         if (body)
             free(body);
         if (lvgl_port_lock(pdMS_TO_TICKS(100)))
@@ -1669,17 +1353,15 @@ esp_err_t banchetto_manager_assegna_banchetto(const char *barcode)
             {
                 for (int i = 0; i < s_list.count; i++)
                 {
-                    strncpy(s_list.items[i].banchetto,
-                            (banc_item && cJSON_IsString(banc_item)) ? banc_item->valuestring : barcode,
-                            sizeof(s_list.items[i].banchetto) - 1);
+                    snprintf(s_list.items[i].banchetto, sizeof(s_list.items[i].banchetto), "%s",
+                             (banc_item && cJSON_IsString(banc_item)) ? banc_item->valuestring : barcode);
                 }
                 xSemaphoreGive(data_mutex);
             }
         }
         else
         {
-            snprintf(msg_buf, sizeof(msg_buf), "%s",
-                     (err_item && cJSON_IsString(err_item)) ? err_item->valuestring : "Errore sconosciuto");
+            snprintf(msg_buf, sizeof(msg_buf), "%s", (err_item && cJSON_IsString(err_item)) ? err_item->valuestring : "Errore sconosciuto");
         }
         cJSON_Delete(json);
     }
@@ -1701,9 +1383,6 @@ esp_err_t banchetto_manager_assegna_banchetto(const char *barcode)
             lv_obj_set_style_radius(p, 12, 0);
             lv_obj_set_style_pad_all(p, 16, 0);
             lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_set_style_shadow_width(p, 30, 0);
-            lv_obj_set_style_shadow_color(p, lv_color_hex(0x000000), 0);
-            lv_obj_set_style_shadow_opa(p, 200, 0);
 
             lv_obj_t *tit = lv_label_create(p);
             lv_label_set_text(tit, LV_SYMBOL_OK " Assegnato");
@@ -1742,8 +1421,6 @@ esp_err_t banchetto_manager_assegna_banchetto(const char *barcode)
         }
         lvgl_port_unlock();
     }
-
-    ESP_LOGI(TAG, "Assegna %s — barcode=%s", ok ? "OK" : "FAIL", barcode);
     return ok ? ESP_OK : ESP_FAIL;
 }
 
@@ -1754,10 +1431,7 @@ esp_err_t banchetto_manager_assegna_banchetto(const char *barcode)
 static esp_err_t badge_dez_to_hex_inline(const char *dez, char *hex_out, size_t hex_size)
 {
     if (!dez || !hex_out || hex_size < 11 || strlen(dez) != 10)
-    {
-        ESP_LOGE(TAG, "Parametri invalidi per conversione badge");
         return ESP_ERR_INVALID_ARG;
-    }
 
     char dez_full[21];
     snprintf(dez_full, sizeof(dez_full), "0000000000%s", dez);
@@ -1766,7 +1440,7 @@ static esp_err_t badge_dez_to_hex_inline(const char *dez, char *hex_out, size_t 
     for (int i = 0; i < 10; i++)
     {
         char pair[3] = {dez_full[i * 2], dez_full[i * 2 + 1], 0};
-        sprintf(&unique_id1[i], "%X", atoi(pair));
+        snprintf(&unique_id1[i], 2, "%X", atoi(pair));
     }
 
     unsigned long long uid_dec = strtoull(unique_id1, NULL, 16);
@@ -1785,10 +1459,9 @@ static esp_err_t badge_dez_to_hex_inline(const char *dez, char *hex_out, size_t 
         int val = 0;
         for (int j = 0; j < 4; j++)
             val = (val << 1) | (bin_original[i * 4 + j] - '0');
-        sprintf(&hex_out[i], "%X", val);
+        snprintf(&hex_out[i], 2, "%X", val);
     }
     hex_out[10] = '\0';
-    ESP_LOGI(TAG, "HEX output: %s", hex_out);
     return ESP_OK;
 }
 
@@ -1798,8 +1471,6 @@ static esp_err_t badge_dez_to_hex_inline(const char *dez, char *hex_out, size_t 
 
 esp_err_t banchetto_manager_login_by_matricola(uint16_t matricola)
 {
-    ESP_LOGI(TAG, "Matricola: %d", matricola);
-
     char url[256];
     snprintf(url, sizeof(url), "%s?operatore=%d", SERVER_BADGE_URL, matricola);
 
@@ -1807,14 +1478,7 @@ esp_err_t banchetto_manager_login_by_matricola(uint16_t matricola)
     char *response_body = NULL;
     esp_err_t ret = http_get_request(url, &response_code, &response_body);
 
-    if (ret != ESP_OK || response_code != 200)
-    {
-        ESP_LOGE(TAG, "Errore HTTP badge.php: %s (code: %d)", esp_err_to_name(ret), response_code);
-        if (response_body)
-            free(response_body);
-        return ESP_FAIL;
-    }
-    if (!response_body || strlen(response_body) == 0)
+    if (ret != ESP_OK || response_code != 200 || !response_body || strlen(response_body) == 0)
     {
         if (response_body)
             free(response_body);
@@ -1822,8 +1486,7 @@ esp_err_t banchetto_manager_login_by_matricola(uint16_t matricola)
     }
 
     char badge_dez[32];
-    strncpy(badge_dez, response_body, sizeof(badge_dez) - 1);
-    badge_dez[sizeof(badge_dez) - 1] = '\0';
+    snprintf(badge_dez, sizeof(badge_dez), "%s", response_body);
     free(response_body);
 
     char *end = badge_dez + strlen(badge_dez) - 1;
@@ -1831,8 +1494,7 @@ esp_err_t banchetto_manager_login_by_matricola(uint16_t matricola)
         *end-- = '\0';
 
     char badge_hex[16];
-    ret = badge_dez_to_hex_inline(badge_dez, badge_hex, sizeof(badge_hex));
-    if (ret != ESP_OK)
+    if (badge_dez_to_hex_inline(badge_dez, badge_hex, sizeof(badge_hex)) != ESP_OK)
         return ESP_FAIL;
 
     return banchetto_manager_login_badge(badge_hex);
@@ -1846,15 +1508,7 @@ void banchetto_manager_print_status(void)
 {
     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
     {
-        ESP_LOGI(TAG, "Articoli: %d | CurrentIdx: %d | Stato: %d",
-                 s_list.count, s_current_idx, s_state);
-        for (int i = 0; i < s_list.count; i++)
-        {
-            banchetto_data_t *d = &s_list.items[i];
-            ESP_LOGI(TAG, "[%d] %s | Op:%s | Mat:%s | Sess:%s",
-                     i, d->codice_articolo, d->operatore, d->matricola,
-                     d->sessione_aperta ? "APERTA" : "CHIUSA");
-        }
+        ESP_LOGI(TAG, "Articoli: %d | CurrentIdx: %d | Stato: %d", s_list.count, s_current_idx, s_state);
         xSemaphoreGive(data_mutex);
     }
 }
@@ -1867,9 +1521,7 @@ bool banchetto_manager_is_ready(void)
         if (s_list.count > 0)
         {
             banchetto_data_t *cur = &s_list.items[s_current_idx];
-            ready = cur->sessione_aperta &&
-                    (cur->matr_scatola_corrente[0] != '\0') &&
-                    (cur->operatore[0] != '\0' || cur->matricola[0] != '\0');
+            ready = cur->sessione_aperta && (cur->matr_scatola_corrente[0] != '\0') && (cur->operatore[0] != '\0' || cur->matricola[0] != '\0');
         }
         xSemaphoreGive(data_mutex);
     }
@@ -1883,30 +1535,5 @@ void banchetto_manager_reset_data(void)
         memset(&s_list, 0, sizeof(banchetto_list_t));
         s_current_idx = 0;
         xSemaphoreGive(data_mutex);
-        ESP_LOGI(TAG, "Dati azzerati");
     }
 }
-
-// {
-//   "OK": 1,
-//   "blocca_qta": 0,
-//   "scatole": [
-//     {
-//       "cod_art": "0101202",
-//       "qta_scatola": 16
-//     },
-//     {
-//       "cod_art": "2816100",
-//       "qta_scatola": 32
-//     },
-//     {
-//       "cod_art": "0101303",
-//       "qta_scatola": 8
-//     },
-//     {
-//       "cod_art": "0101200",
-//       "qta_scatola": 8
-//     }
-//   ],
-//   "debug": ""
-// }

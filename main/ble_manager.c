@@ -7,6 +7,7 @@
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "host/ble_gatt.h"
+#include "freertos/queue.h"
 #include <string.h>
 
 static const char *TAG = "BLE_MGR";
@@ -31,8 +32,8 @@ extern void ui_update_ble_status(bool connected);
 static uint16_t conn_handle = 0;
 static bool is_connected = false;
 
-/* Task handle per versa asincrono */
-static TaskHandle_t versa_task_handle = NULL;
+/* Coda asincrona per eseguire azioni fuori dal task BLE */
+static QueueHandle_t ble_action_queue = NULL;
 
 /* Riferimenti esterni */
 extern void deep_sleep_reset_timer(void);
@@ -42,14 +43,29 @@ extern bool banchetto_manager_versa(uint32_t qta);
 static void ble_start_scan(void);
 static int ble_gap_event_cb(struct ble_gap_event *event, void *arg);
 
-/* Task separato per eseguire versa (stack pesante) */
-static void ble_versa_task(void *param)
+/* Task separato per eseguire versa (stack pesante, totalmente isolato) */
+/* Task separato per eseguire versa (stack pesante, totalmente isolato) */
+static void ble_action_task(void *param)
 {
-    while (1) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        ESP_LOGW(TAG, "VERSA da BLE!");
-        deep_sleep_reset_timer();
-        banchetto_manager_versa(1);
+    uint32_t action_cmd;
+    while (1)
+    {
+        if (xQueueReceive(ble_action_queue, &action_cmd, portMAX_DELAY) == pdTRUE)
+        {
+            if (action_cmd == 1) // 1 = Comando Versa
+            {
+                ESP_LOGW(TAG, "Comando VERSA ricevuto. Attendo che il BLE si liberi...");
+
+                // --- IL RITARDO VITALE CHE AVEVO TOLTO ---
+                // Diamo tempo al Bluetooth di spedire la conferma (ACK)
+                // prima di saturare la memoria con la chiamata HTTP.
+                vTaskDelay(pdMS_TO_TICKS(1500));
+
+                ESP_LOGW(TAG, "Eseguo VERSA ora.");
+                deep_sleep_reset_timer();
+                banchetto_manager_versa(1);
+            }
+        }
     }
 }
 
@@ -57,7 +73,8 @@ static void ble_versa_task(void *param)
 static void update_target_name(void)
 {
     const char *id = banchetto_manager_get_banchetto_id();
-    if (id && id[0] != '\0') {
+    if (id && id[0] != '\0')
+    {
         snprintf(target_name, sizeof(target_name), "CNC_%s", id);
     }
 }
@@ -67,9 +84,12 @@ static void update_target_name(void)
 static int ble_on_subscribe(uint16_t conn, const struct ble_gatt_error *error,
                             struct ble_gatt_attr *attr, void *arg)
 {
-    if (error->status == 0) {
+    if (error->status == 0)
+    {
         ESP_LOGI(TAG, "Subscribed alle indication OK");
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Errore subscribe: %d", error->status);
     }
     return 0;
@@ -78,19 +98,25 @@ static int ble_on_subscribe(uint16_t conn, const struct ble_gatt_error *error,
 static int ble_on_disc_chr(uint16_t conn, const struct ble_gatt_error *error,
                            const struct ble_gatt_chr *chr, void *arg)
 {
-    if (error->status == 0 && chr != NULL) {
+    if (error->status == 0 && chr != NULL)
+    {
         ESP_LOGI(TAG, "Characteristic trovata, val_handle: %d", chr->val_handle);
 
         uint8_t value[2] = {0x02, 0x00};
         int rc = ble_gattc_write_flat(conn, chr->val_handle + 1,
                                       value, sizeof(value),
                                       ble_on_subscribe, NULL);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             ESP_LOGE(TAG, "Errore write CCCD: %d", rc);
         }
-    } else if (error->status == BLE_HS_EDONE) {
+    }
+    else if (error->status == BLE_HS_EDONE)
+    {
         ESP_LOGI(TAG, "Discovery characteristic completata");
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Errore discovery chr: %d", error->status);
     }
     return 0;
@@ -99,7 +125,8 @@ static int ble_on_disc_chr(uint16_t conn, const struct ble_gatt_error *error,
 static int ble_on_disc_svc(uint16_t conn, const struct ble_gatt_error *error,
                            const struct ble_gatt_svc *svc, void *arg)
 {
-    if (error->status == 0 && svc != NULL) {
+    if (error->status == 0 && svc != NULL)
+    {
         ESP_LOGI(TAG, "Servizio trovato, handle: %d-%d",
                  svc->start_handle, svc->end_handle);
 
@@ -107,12 +134,17 @@ static int ble_on_disc_svc(uint16_t conn, const struct ble_gatt_error *error,
                                              svc->end_handle,
                                              &chr_uuid.u,
                                              ble_on_disc_chr, NULL);
-        if (rc != 0) {
+        if (rc != 0)
+        {
             ESP_LOGE(TAG, "Errore disc chr: %d", rc);
         }
-    } else if (error->status == BLE_HS_EDONE) {
+    }
+    else if (error->status == BLE_HS_EDONE)
+    {
         ESP_LOGI(TAG, "Discovery servizio completata");
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Errore discovery svc: %d", error->status);
     }
     return 0;
@@ -122,29 +154,35 @@ static int ble_on_disc_svc(uint16_t conn, const struct ble_gatt_error *error,
 
 static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
 {
-    switch (event->type) {
+    switch (event->type)
+    {
 
-    case BLE_GAP_EVENT_DISC: {
+    case BLE_GAP_EVENT_DISC:
+    {
         struct ble_hs_adv_fields fields;
         int rc = ble_hs_adv_parse_fields(&fields, event->disc.data,
                                          event->disc.length_data);
-        if (rc != 0) return 0;
+        if (rc != 0)
+            return 0;
 
-        if (fields.name != NULL && fields.name_len > 0) {
+        if (fields.name != NULL && fields.name_len > 0)
+        {
             char name[32] = {0};
             int len = fields.name_len < sizeof(name) - 1 ? fields.name_len : sizeof(name) - 1;
             memcpy(name, fields.name, len);
 
             update_target_name();
 
-            if (target_name[0] != '\0' && strcmp(name, target_name) == 0) {
+            if (target_name[0] != '\0' && strcmp(name, target_name) == 0)
+            {
                 ESP_LOGI(TAG, "Trovato %s! RSSI: %d, connessione...",
                          target_name, event->disc.rssi);
 
                 ble_gap_disc_cancel();
                 rc = ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &event->disc.addr,
                                      10000, NULL, ble_gap_event_cb, NULL);
-                if (rc != 0) {
+                if (rc != 0)
+                {
                     ESP_LOGE(TAG, "Errore connect: %d", rc);
                     ble_start_scan();
                 }
@@ -153,26 +191,29 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
     }
 
-    case BLE_GAP_EVENT_CONNECT: {
-        if (event->connect.status == 0) {
+    case BLE_GAP_EVENT_CONNECT:
+    {
+        if (event->connect.status == 0)
+        {
             conn_handle = event->connect.conn_handle;
             is_connected = true;
-            
-            // ---> AGGIUNTO QUI <---
-            ui_update_ble_status(true); 
+
+            ui_update_ble_status(true);
 
             ESP_LOGI(TAG, "Connesso a %s! handle: %d", target_name, conn_handle);
 
             int rc = ble_gattc_disc_svc_by_uuid(conn_handle, &svc_uuid.u,
                                                 ble_on_disc_svc, NULL);
-            if (rc != 0) {
+            if (rc != 0)
+            {
                 ESP_LOGE(TAG, "Errore disc svc: %d", rc);
             }
-        } else {
+        }
+        else
+        {
             ESP_LOGW(TAG, "Connessione fallita: %d, riscan...", event->connect.status);
             is_connected = false;
-            
-            // ---> AGGIUNTO QUI (per sicurezza in caso di fail dopo connect) <---
+
             ui_update_ble_status(false);
 
             ble_start_scan();
@@ -180,13 +221,13 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
     }
 
-    case BLE_GAP_EVENT_DISCONNECT: {
+    case BLE_GAP_EVENT_DISCONNECT:
+    {
         ESP_LOGW(TAG, "Disconnesso da %s (reason: %d), riscan...",
                  target_name, event->disconnect.reason);
         is_connected = false;
         conn_handle = 0;
-        
-        // ---> AGGIUNTO QUI <---
+
         ui_update_ble_status(false);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -194,11 +235,14 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
     }
 
-    case BLE_GAP_EVENT_NOTIFY_RX: {
-        if (event->notify_rx.om != NULL) {
+    case BLE_GAP_EVENT_NOTIFY_RX:
+    {
+        if (event->notify_rx.om != NULL)
+        {
             uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
             char buf[128] = {0};
-            if (len < sizeof(buf)) {
+            if (len < sizeof(buf))
+            {
                 os_mbuf_copydata(event->notify_rx.om, 0, len, buf);
                 buf[len] = '\0';
 
@@ -210,26 +254,40 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
                 char id_check[48];
                 snprintf(id_check, sizeof(id_check), "\"id\":\"%s\"", banc_id);
 
-                if (strstr(buf, "\"v\":1") && strstr(buf, id_check)) {
-                    /* Segnala al task versa (non chiamare versa qui!) */
-                    if (versa_task_handle) {
-                        xTaskNotifyGive(versa_task_handle);
+                if (strstr(buf, "\"v\":1") && strstr(buf, id_check))
+                {
+                    /* Invia alla coda non bloccante invece di usare notify! */
+                    uint32_t cmd = 1;
+                    if (ble_action_queue)
+                    {
+                        xQueueSend(ble_action_queue, &cmd, 0);
                     }
-                } else {
+                }
+                else
+                {
                     ESP_LOGW(TAG, "Payload non riconosciuto o ID errato: %s", buf);
                 }
+            }
+            else
+            {
+                ESP_LOGE(TAG, "Payload ricevuto troppo grande (%d bytes)", len);
             }
         }
         return 0;
     }
 
-    case BLE_GAP_EVENT_DISC_COMPLETE: {
-        if (!is_connected) {
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+    {
+        if (!is_connected)
+        {
             update_target_name();
-            if (target_name[0] == '\0') {
+            if (target_name[0] == '\0')
+            {
                 ESP_LOGW(TAG, "Banchetto non ancora assegnato, riprovo tra 5s...");
                 vTaskDelay(pdMS_TO_TICKS(5000));
-            } else {
+            }
+            else
+            {
                 ESP_LOGI(TAG, "Scan completato, %s non trovato. Riscan...", target_name);
                 vTaskDelay(pdMS_TO_TICKS(2000));
             }
@@ -245,7 +303,8 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
 
 static void ble_start_scan(void)
 {
-    if (s_scan_paused) {
+    if (s_scan_paused)
+    {
         ESP_LOGD(TAG, "Scan BLE sospesa (WiFi scan in corso).");
         return;
     }
@@ -261,7 +320,8 @@ static void ble_start_scan(void)
 
     update_target_name();
 
-    if (target_name[0] == '\0') {
+    if (target_name[0] == '\0')
+    {
         ESP_LOGW(TAG, "Nessun banchetto configurato, scan rinviato...");
         return;
     }
@@ -270,7 +330,8 @@ static void ble_start_scan(void)
 
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 15000, &scan_params,
                           ble_gap_event_cb, NULL);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         ESP_LOGE(TAG, "Errore avvio scan: %d", rc);
     }
 }
@@ -280,7 +341,8 @@ static void ble_start_scan(void)
 static void ble_on_sync(void)
 {
     int rc = ble_hs_util_ensure_addr(0);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         ESP_LOGE(TAG, "Errore config indirizzo BLE: %d", rc);
         return;
     }
@@ -308,7 +370,8 @@ static void ble_host_task(void *param)
 void ble_manager_pause_scan(void)
 {
     s_scan_paused = true;
-    if (ble_gap_disc_active()) {
+    if (ble_gap_disc_active())
+    {
         ble_gap_disc_cancel();
         ESP_LOGI(TAG, "Scan BLE sospesa per WiFi scan.");
     }
@@ -317,7 +380,8 @@ void ble_manager_pause_scan(void)
 void ble_manager_resume_scan(void)
 {
     s_scan_paused = false;
-    if (!is_connected) {
+    if (!is_connected)
+    {
         ESP_LOGI(TAG, "Scan BLE ripresa.");
         ble_start_scan();
     }
@@ -333,11 +397,13 @@ void ble_manager_init(void)
     ESP_LOGI(TAG, "Target iniziale: %s",
              target_name[0] ? target_name : "(banchetto non ancora caricato)");
 
-    /* Task separato per versa: serve stack grande per HTTP + LVGL + audio */
-    xTaskCreate(ble_versa_task, "ble_versa", 8192, NULL, 5, &versa_task_handle);
+    /* Creazione Coda e Task separato per isolare le chiamate pesanti dal BLE */
+    ble_action_queue = xQueueCreate(5, sizeof(uint32_t));
+    xTaskCreate(ble_action_task, "ble_action", 8192, NULL, 5, NULL);
 
     int rc = nimble_port_init();
-    if (rc != ESP_OK) {
+    if (rc != ESP_OK)
+    {
         ESP_LOGE(TAG, "Errore nimble_port_init: %d", rc);
         return;
     }

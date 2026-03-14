@@ -19,6 +19,7 @@ idf_component_register(
     "time_manager.c"
     "badge_cache.c"
     "offline_journal.c"
+    "ff_memalloc_dma.c"
     INCLUDE_DIRS "."
     REQUIRES 
         espressif__esp_hosted 
@@ -89,5 +90,10 @@ if(CONFIG_LV_MEM_CUSTOM)
             "-DLV_MEM_CUSTOM_ALLOC(x)=heap_caps_malloc(x, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)"
     )
 endif()
+
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=ff_memalloc" APPEND)
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=ff_memfree" APPEND)
+idf_build_set_property(LINK_OPTIONS "-u__wrap_ff_memalloc" APPEND)
+idf_build_set_property(LINK_OPTIONS "-u__wrap_ff_memfree" APPEND)
 
 spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)

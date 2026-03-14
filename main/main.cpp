@@ -17,7 +17,7 @@
 #include "esp_brookesia.hpp"
 #include "app_examples/phone/squareline/src/phone_app_squareline.hpp"
 #include "apps.h"
-
+#include "esp_heap_caps.h"
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
 
@@ -396,6 +396,9 @@ extern "C" void app_main(void)
 
     bsp_display_unlock();
     bsp_display_backlight_on();
+    ESP_LOGW("RAM_MONITOR", "RAM Interna libera: %zu byte | PSRAM libera: %zu byte",
+             heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     ESP_LOGI(TAG, "Sistema avviato completamente");
 }

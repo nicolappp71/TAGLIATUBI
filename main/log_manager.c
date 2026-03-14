@@ -9,20 +9,23 @@
 #include <stdarg.h>
 #include <sys/stat.h>
 
-#define LOG_LINE_LEN     160
-#define LOG_RING_SIZE    500
+#define LOG_LINE_LEN 160
+#define LOG_RING_SIZE 500
 #define LOG_SD_QUEUE_LEN 64
-#define LOG_SD_PATH      "/sdcard/logs"
+#define LOG_SD_PATH "/sdcard/logs"
 
 // ─── Ring buffer in PSRAM ─────────────────────────────────
-static char     (*s_ring)[LOG_LINE_LEN] = NULL;
-static uint32_t   s_ring_head = 0;
-static uint32_t   s_total     = 0;
-static portMUX_TYPE s_mux     = portMUX_INITIALIZER_UNLOCKED;
+static char (*s_ring)[LOG_LINE_LEN] = NULL;
+static uint32_t s_ring_head = 0;
+static uint32_t s_total = 0;
+static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // ─── Queue verso task SD ──────────────────────────────────
 static QueueHandle_t s_sd_queue = NULL;
-static bool          s_sd_ready = false;
+static bool s_sd_ready = false;
+
+// ─── Task Handle per scudo anti-ricorsione ────────────────
+static TaskHandle_t s_sd_task_handle = NULL;
 
 // ─── vprintf originale ───────────────────────────────────
 static vprintf_like_t s_orig_vprintf = NULL;
@@ -39,6 +42,13 @@ static int log_vprintf_hook(const char *fmt, va_list args)
 
     if (!s_ring)
         return ret;
+
+    // SCUDO ANTI-RICORSIONE: Se il log è generato dal task che scrive sulla SD,
+    // ignoralo per l'accodamento su SD (altrimenti loop infinito FatFS -> Log -> FatFS).
+    if (xTaskGetCurrentTaskHandle() == s_sd_task_handle)
+    {
+        return ret;
+    }
 
     char tmp[LOG_LINE_LEN];
     va_list args2;
@@ -106,7 +116,11 @@ static void sd_writer_task(void *arg)
         else
         {
             // Timeout — chiudi file per flush sicuro
-            if (f) { fclose(f); f = NULL; }
+            if (f)
+            {
+                fclose(f);
+                f = NULL;
+            }
         }
     }
 }
@@ -126,9 +140,11 @@ esp_err_t log_manager_init(void)
     if (!s_sd_queue)
         return ESP_ERR_NO_MEM;
 
-    s_orig_vprintf = esp_log_set_vprintf(log_vprintf_hook);
+    // Salviamo l'handle del task per l'anti-ricorsione
+    xTaskCreatePinnedToCore(sd_writer_task, "log_sd", 4096, NULL, 2, &s_sd_task_handle, 1);
 
-    xTaskCreatePinnedToCore(sd_writer_task, "log_sd", 4096, NULL, 2, NULL, 1);
+    // Settiamo l'hook solo DOPO aver creato il task, così s_sd_task_handle è valido
+    s_orig_vprintf = esp_log_set_vprintf(log_vprintf_hook);
 
     return ESP_OK;
 }
