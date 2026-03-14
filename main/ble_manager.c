@@ -59,7 +59,7 @@ static void ble_action_task(void *param)
                 // --- IL RITARDO VITALE CHE AVEVO TOLTO ---
                 // Diamo tempo al Bluetooth di spedire la conferma (ACK)
                 // prima di saturare la memoria con la chiamata HTTP.
-                vTaskDelay(pdMS_TO_TICKS(1500));
+                vTaskDelay(pdMS_TO_TICKS(1000));
 
                 ESP_LOGW(TAG, "Eseguo VERSA ora.");
                 deep_sleep_reset_timer();

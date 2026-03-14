@@ -366,7 +366,7 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "credential.h"
-#include "offline_queue.h"
+#include "offline_journal.h"
 
 // --- CONFIGURAZIONE ---
 
@@ -376,6 +376,7 @@ static int s_retry_num = 0;
 static bool s_is_locked = false;
 
 static uint8_t current_bssid[6] = {0};
+static TaskHandle_t s_reconnect_task = NULL;
 
 static bool find_best_network_global(uint8_t *bssid_out, uint8_t *channel_out, int *rssi_out)
 {
@@ -446,34 +447,16 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         s_retry_num++;
 
-        if (s_is_locked && s_retry_num > 1) {
-            ESP_LOGE(TAG, "🚨 Connessione persa! Cerco la rete migliore...");
-
+        if (s_is_locked && s_retry_num > 3) {
+            ESP_LOGE(TAG, "🚨 Antenna bloccata non risponde! Sblocco BSSID.");
             s_is_locked = false;
             s_retry_num = 0;
 
-            uint8_t best_bssid[6];
-            uint8_t best_channel;
-            int best_rssi;
-
-            if (find_best_network_global(best_bssid, &best_channel, &best_rssi)) {
-                ESP_LOGI(TAG, "📡 Cambio AP in corso! Migliore: %d dBm (Canale: %d)", best_rssi, best_channel);
-                wifi_config_t conf;
-                esp_wifi_get_config(WIFI_IF_STA, &conf);
-                memcpy(conf.sta.bssid, best_bssid, 6);
-                conf.sta.bssid_set = true;
-                conf.sta.channel = best_channel;
-                s_is_locked = true;
-                esp_wifi_set_config(WIFI_IF_STA, &conf);
-            } else {
-                ESP_LOGW(TAG, "⚠ Nessun AP trovato, sblocco BSSID.");
-                wifi_config_t conf;
-                esp_wifi_get_config(WIFI_IF_STA, &conf);
-                conf.sta.bssid_set = false;
-                memset(conf.sta.bssid, 0, 6);
-                esp_wifi_set_config(WIFI_IF_STA, &conf);
-            }
-
+            wifi_config_t conf;
+            esp_wifi_get_config(WIFI_IF_STA, &conf);
+            conf.sta.bssid_set = false;
+            memset(conf.sta.bssid, 0, 6);
+            esp_wifi_set_config(WIFI_IF_STA, &conf);
             esp_wifi_connect();
             return;
         }
@@ -500,9 +483,31 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 
-        if (offline_queue_count() > 0) {
-            ESP_LOGI(TAG, "WiFi riconnesso — avvio sync coda offline...");
-            offline_queue_process();
+        if (offline_journal_count() > 0 && s_reconnect_task) {
+            ESP_LOGI(TAG, "WiFi riconnesso — notifico task replay journal...");
+            xTaskNotifyGive(s_reconnect_task);
+        }
+    }
+}
+
+static void wifi_reconnect_task(void *pvParameters)
+{
+    while (1) {
+        // Attende notifica (da GOT_IP) o timeout 30s (per riconnessione dopo FAIL_BIT)
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000));
+
+        if (notified > 0) {
+            // Notificato da event_handler: WiFi tornato, replay journal
+            ESP_LOGI(TAG, "wifi_reconnect_task: replay journal offline...");
+            offline_journal_replay();
+        } else {
+            // Timeout: se siamo in FAIL_BIT, riprova connessione
+            if (xEventGroupGetBits(s_wifi_event_group) & WIFI_FAIL_BIT) {
+                ESP_LOGI(TAG, "wifi_reconnect_task: riprovo connessione WiFi...");
+                xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
+                s_retry_num = 0;
+                esp_wifi_connect();
+            }
         }
     }
 }
@@ -576,6 +581,7 @@ void wifi_init_sta(void)
     esp_wifi_connect();
 
     xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+    xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 8192, NULL, 3, &s_reconnect_task);
 }
 
 int wifi_get_rssi(void)
