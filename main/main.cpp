@@ -20,7 +20,7 @@
 #include "esp_heap_caps.h"
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
-
+#include "esp_app_desc.h" // Necessario per leggere i metadati
 extern "C"
 {
 #include "wifi_manager.h"
@@ -399,6 +399,16 @@ extern "C" void app_main(void)
     ESP_LOGW("RAM_MONITOR", "RAM Interna libera: %zu byte | PSRAM libera: %zu byte",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+
+    ESP_LOGI("APP_INFO", "=============================================");
+    ESP_LOGI("APP_INFO", "Project Name:      %s", app_desc->project_name);
+    ESP_LOGI("APP_INFO", "App Version:       %s", app_desc->version);
+    ESP_LOGI("APP_INFO", "Compile Time:      %s", app_desc->time);
+    ESP_LOGI("APP_INFO", "Compile Date:      %s", app_desc->date);
+    ESP_LOGI("APP_INFO", "IDF Version:       %s", app_desc->idf_ver);
+    ESP_LOGI("APP_INFO", "=============================================");
 
     ESP_LOGI(TAG, "Sistema avviato completamente");
 }
