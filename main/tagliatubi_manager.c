@@ -14,13 +14,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "mode.h"
 
 static const char *TAG = "tagliatubi";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
-// tagliatubi.php è su server separato rispetto a banchetti
-#define TAGL_SERVER     "http://192.168.1.53"
-#define TAGL_PHP_URL    TAGL_SERVER "/iot/tagliatubi.php"
+#define TAGL_PHP_URL    SERVER_BASE "/iot/tagliatubi.php"
 
 // ─── Internal events ─────────────────────────────────────────────────────────
 #define EVT_START           BIT0
@@ -194,7 +193,7 @@ static void motor_move(uint32_t total_pulses)
 //  Cutting sequence
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void do_taglio(void)
+static void do_taglio(bool conta)
 {
     notify(TAGL_STATE_CUTTING);
 
@@ -210,21 +209,13 @@ static void do_taglio(void)
     gpio_set_level(TAGL_VALVOLA_C_GPIO, 1);
     gpio_set_level(TAGL_VALVOLA_A_GPIO, 1);
 
-    s_data.prodotti++;
-
-    // Versa nel banchetto (aggiorna qta_prod_fase, sessione, ecc.)
-    banchetto_manager_versa(1);
-
-    // Report piece to server (com=8: update prodotti count mid-batch)
-    char url[160];
-    snprintf(url, sizeof(url), TAGL_PHP_URL "?com=8&nid=%d&valore=%d",
-             s_data.id, (int)s_data.prodotti);
-    int code = 0;
-    char *body = NULL;
-    http_get_request(url, &code, &body);
-    if (body) free(body);
-
-    ESP_LOGI(TAG, "Taglio OK — prodotti: %d/%d", (int)s_data.prodotti, (int)s_data.quantita);
+    if (conta) {
+        s_data.prodotti++;
+        banchetto_manager_versa(1);
+        ESP_LOGI(TAG, "Taglio OK — prodotti: %d/%d", (int)s_data.prodotti, (int)s_data.quantita);
+    } else {
+        ESP_LOGI(TAG, "Taglio manuale (non conteggiato)");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,12 +303,12 @@ static void tagliatubi_task(void *arg)
                 notify(TAGL_STATE_IDLE);
                 continue;
             }
-            do_taglio();
+            do_taglio(false);  // manuale: non conta
             notify(TAGL_STATE_IDLE);
             continue;
         }
 
-        // ── Advance only (no cut) — fixed 100 steps ─────────────────────────
+        // ── Advance only (no cut) — fixed steps ─────────────────────────────
         if (ev & EVT_AVANTI) {
             if (!is_safe()) {
                 notify(TAGL_STATE_ERROR_SAFETY);
@@ -326,7 +317,7 @@ static void tagliatubi_task(void *arg)
                 continue;
             }
             pcnt_reset_all();
-            motor_move(6400);
+            motor_move(TAGL_AVANTI_STEPS);
             vTaskDelay(pdMS_TO_TICKS(50));   // attendi fine inerzia meccanica
             {
                 int32_t cnt = pcnt_total();
@@ -345,6 +336,16 @@ static void tagliatubi_task(void *arg)
                 notify(TAGL_STATE_IDLE);
                 continue;
             }
+            {
+                banchetto_data_t bd;
+                banchetto_manager_get_data(&bd);
+                if (bd.qta_totale_scatola > 0 && bd.qta_scatola >= bd.qta_totale_scatola) {
+                    ESP_LOGI(TAG, "Scatola piena (%lu/%lu) — singolo bloccato",
+                             bd.qta_scatola, bd.qta_totale_scatola);
+                    notify(TAGL_STATE_BOX_FULL);
+                    continue;
+                }
+            }
             uint32_t nstep = calc_nstep();
             pcnt_reset_all();
             motor_move(nstep * TAGL_LOOP_MULTIPLIER);
@@ -362,7 +363,7 @@ static void tagliatubi_task(void *arg)
                 notify(TAGL_STATE_IDLE);
                 continue;
             }
-            do_taglio();
+            do_taglio(true);   // singolo: conta il pezzo
             notify(TAGL_STATE_IDLE);
             continue;
         }
@@ -395,11 +396,29 @@ static void tagliatubi_task(void *arg)
                 }
                 is_ciclo = true;  // keep bypass active during cycle
 
+                // Scatola piena? Sospendi il ciclo prima di avanzare
+                banchetto_data_t bd;
+                banchetto_manager_get_data(&bd);
+                if (bd.qta_totale_scatola > 0 && bd.qta_scatola >= bd.qta_totale_scatola) {
+                    ESP_LOGI(TAG, "Scatola piena (%lu/%lu) — ciclo sospeso",
+                             bd.qta_scatola, bd.qta_totale_scatola);
+                    notify(TAGL_STATE_BOX_FULL);
+                    break;
+                }
+
                 // Move
                 uint32_t nstep = calc_nstep();
                 pcnt_reset_all();
                 motor_move(nstep * TAGL_LOOP_MULTIPLIER);
                 vTaskDelay(pdMS_TO_TICKS(50));   // attendi fine inerzia meccanica
+
+                // STOP premuto durante il movimento → torna IDLE senza errori
+                if (xEventGroupGetBits(s_evg) & EVT_STOP) {
+                    xEventGroupClearBits(s_evg, EVT_STOP);
+                    ESP_LOGI(TAG, "Cycle stopped by user (post-move)");
+                    notify(TAGL_STATE_IDLE);
+                    break;
+                }
 
                 // Post-move checks
                 if (!has_material() || !is_safe()) {
@@ -411,12 +430,10 @@ static void tagliatubi_task(void *arg)
                 if (!encoder_check_ok()) {
                     ESP_LOGW(TAG, "Encoder fail — pezzo scartato");
                     notify(TAGL_STATE_ERROR_LENGTH);
-                    vTaskDelay(pdMS_TO_TICKS(300));
-                    notify(TAGL_STATE_RUNNING);
-                    continue;  // retry same piece
+                    break;
                 }
 
-                do_taglio();
+                do_taglio(true);  // ciclo automatico: conta
                 notify(TAGL_STATE_RUNNING);
             }
 
@@ -635,14 +652,14 @@ esp_err_t tagliatubi_manager_singolo(void)
 
 esp_err_t tagliatubi_manager_avanti(void)
 {
-    if (s_state != TAGL_STATE_IDLE) return ESP_ERR_INVALID_STATE;
+    if (s_state != TAGL_STATE_IDLE && s_state != TAGL_STATE_BOX_FULL) return ESP_ERR_INVALID_STATE;
     xEventGroupSetBits(s_evg, EVT_AVANTI);
     return ESP_OK;
 }
 
 esp_err_t tagliatubi_manager_taglio(void)
 {
-    if (s_state != TAGL_STATE_IDLE) return ESP_ERR_INVALID_STATE;
+    if (s_state != TAGL_STATE_IDLE && s_state != TAGL_STATE_BOX_FULL) return ESP_ERR_INVALID_STATE;
     xEventGroupSetBits(s_evg, EVT_TAGLIO);
     return ESP_OK;
 }

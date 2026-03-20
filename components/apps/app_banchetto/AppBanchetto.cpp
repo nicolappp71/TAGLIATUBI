@@ -16,6 +16,10 @@ extern "C" void popup_avviso_open(const char *titolo, const char *messaggio, boo
 
 static const char *TAG = "AppBanchetto";
 
+// ─── Sensibilità swipe (pixel minimi) ────────────────────
+#define SWIPE_H_THRESHOLD  80   // orizzontale: cambia pagina
+#define SWIPE_V_THRESHOLD  80   // verticale: cambia articolo
+
 // ─── Variabili statiche — array per articolo ─────────────
 lv_obj_t *AppBanchetto::page1_scr[BANCHETTO_MAX_ITEMS] = {};
 lv_obj_t *AppBanchetto::lbl_matricola[BANCHETTO_MAX_ITEMS] = {};
@@ -218,6 +222,7 @@ static const char *tagl_state_label(tagliatubi_state_t s)
         case TAGL_STATE_ERROR_NO_MATERIAL: return "NO MATERIALE";
         case TAGL_STATE_ERROR_SAFETY:      return "SICUREZZA";
         case TAGL_STATE_ERROR_LENGTH:      return "ERRORE MISURA";
+        case TAGL_STATE_BOX_FULL:          return "SCATOLA PIENA";
         default:                           return "IDLE";
     }
 }
@@ -230,6 +235,7 @@ static lv_color_t tagl_state_color(tagliatubi_state_t s)
         case TAGL_STATE_ERROR_NO_MATERIAL:
         case TAGL_STATE_ERROR_SAFETY:
         case TAGL_STATE_ERROR_LENGTH:      return lv_color_hex(0xFF4444);
+        case TAGL_STATE_BOX_FULL:          return lv_color_hex(0xFFAA00);
         default:                           return lv_color_hex(0x888888);
     }
 }
@@ -506,35 +512,40 @@ void AppBanchetto::update_page3(uint8_t idx)
     banchetto_manager_get_item(idx, &d);
     ESP_LOGI("AppBanchetto", "[DBG] update_page3 codice=%s banchetto=%s", d.codice_articolo, d.banchetto);
 
-    // Carica dati tagliatubi dal server usando il codice articolo
-    esp_err_t ret = tagliatubi_manager_load_product(d.codice_articolo);
-    if (ret == ESP_OK) {
-        const tagliatubi_data_t *td = tagliatubi_manager_get_data();
-        ESP_LOGI("AppBanchetto", "[DBG page3] id=%d codice=%s desc=%s",
-                 td->id, td->codice, td->descrizione);
-        ESP_LOGI("AppBanchetto", "[DBG page3] lunghezza=%ld diametro=%ld quantita=%ld prodotti=%ld velocita=%d",
-                 td->lunghezza, td->diametro, td->quantita, td->prodotti, td->velocita);
-        // Lunghezza dal DB (vuota se 0 — operatore deve inserirla)
-        if (p3_lbl_lunghezza) {
-            if (td->lunghezza > 0) {
-                char lbuf[16];
-                snprintf(lbuf, sizeof(lbuf), "%ld", td->lunghezza);
-                lv_label_set_text(p3_lbl_lunghezza, lbuf);
-            } else {
-                lv_label_set_text(p3_lbl_lunghezza, "");
-            }
+    // Carica dal server solo se il prodotto non è ancora stato caricato
+    const tagliatubi_data_t *td = tagliatubi_manager_get_data();
+    if (td->id == 0) {
+        esp_err_t ret = tagliatubi_manager_load_product(d.codice_articolo);
+        if (ret != ESP_OK) {
+            ESP_LOGW("AppBanchetto", "tagliatubi_manager_load_product(%s) failed", d.codice_articolo);
+            return;
         }
-        // Velocita dal DB
-        if (p3_lbl_velocita) {
-            char vbuf[8];
-            snprintf(vbuf, sizeof(vbuf), "%d", td->velocita);
-            lv_label_set_text(p3_lbl_velocita, vbuf);
-        }
-        tagliatubi_manager_set_quantita((int32_t)d.qta_totale);
-        ESP_LOGI("AppBanchetto", "[DBG page3] banchetto qta_totale=%lu", d.qta_totale);
-    } else {
-        ESP_LOGW("AppBanchetto", "tagliatubi_manager_load_product(%s) failed", d.codice_articolo);
+        td = tagliatubi_manager_get_data();
     }
+
+    ESP_LOGI("AppBanchetto", "[DBG page3] id=%d codice=%s desc=%s",
+             td->id, td->codice, td->descrizione);
+    ESP_LOGI("AppBanchetto", "[DBG page3] lunghezza=%ld diametro=%ld quantita=%ld prodotti=%ld velocita=%d",
+             td->lunghezza, td->diametro, td->quantita, td->prodotti, td->velocita);
+
+    // Lunghezza dal DB (vuota se 0 — operatore deve inserirla)
+    if (p3_lbl_lunghezza) {
+        if (td->lunghezza > 0) {
+            char lbuf[16];
+            snprintf(lbuf, sizeof(lbuf), "%ld", td->lunghezza);
+            lv_label_set_text(p3_lbl_lunghezza, lbuf);
+        } else {
+            lv_label_set_text(p3_lbl_lunghezza, "");
+        }
+    }
+    // Velocita dal DB
+    if (p3_lbl_velocita) {
+        char vbuf[8];
+        snprintf(vbuf, sizeof(vbuf), "%d", td->velocita);
+        lv_label_set_text(p3_lbl_velocita, vbuf);
+    }
+    tagliatubi_manager_set_quantita((int32_t)d.qta_totale);
+    ESP_LOGI("AppBanchetto", "[DBG page3] banchetto qta_totale=%lu", d.qta_totale);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -613,13 +624,13 @@ void AppBanchetto::crea_page4(uint8_t idx)
     lv_obj_align(tp, LV_ALIGN_TOP_LEFT, 0, 358);
 
     p4_lbl_counter = lv_label_create(sidebar);
-    lv_label_set_text(p4_lbl_counter, "0 / 0");
+    lv_label_set_text(p4_lbl_counter, "");
     lv_obj_set_style_text_font(p4_lbl_counter, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(p4_lbl_counter, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(p4_lbl_counter, LV_ALIGN_TOP_LEFT, 0, 382);
 
 
-    // ── CARD GIALLA — avanzamento fase ───────────────────────────────────────
+    // ── CARD GIALLA — scatola pezzi/capacità ─────────────────────────────────
     lv_obj_t *card_top = lv_obj_create(scr);
     lv_obj_set_pos(card_top, CX, GAP);
     lv_obj_set_size(card_top, CW, 110);
@@ -632,7 +643,7 @@ void AppBanchetto::crea_page4(uint8_t idx)
     lv_obj_add_flag(card_top, LV_OBJ_FLAG_EVENT_BUBBLE);
     {
         lv_obj_t *tit = lv_label_create(card_top);
-        lv_label_set_text(tit, "AVANZAMENTO FASE");
+        lv_label_set_text(tit, "SCATOLA");
         lv_obj_set_style_text_font(tit, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(tit, lv_color_hex(0x00000066), 0);
         lv_obj_set_style_text_letter_space(tit, 4, 0);
@@ -640,11 +651,12 @@ void AppBanchetto::crea_page4(uint8_t idx)
 
         p4_lbl_avanzamento = lv_label_create(card_top);
         char buf[32];
-        snprintf(buf, sizeof(buf), "%lu / %lu pz", d.qta_prod_fase, d.qta_totale);
+        snprintf(buf, sizeof(buf), "%lu / %lu", d.qta_scatola, d.qta_totale_scatola);
         lv_label_set_text(p4_lbl_avanzamento, buf);
         lv_obj_set_style_text_font(p4_lbl_avanzamento, &lv_font_montserrat_48, 0);
         lv_obj_set_style_text_color(p4_lbl_avanzamento, lv_color_hex(0x000000), 0);
         lv_obj_align(p4_lbl_avanzamento, LV_ALIGN_TOP_LEFT, 0, 26);
+
     }
 
     // ── BOTTONI AZIONE: 3 righe ───────────────────────────────────────────────
@@ -732,6 +744,16 @@ void AppBanchetto::crea_page4(uint8_t idx)
 // ─────────────────────────────────────────────────────────
 // REFRESH PAGE 4
 // ─────────────────────────────────────────────────────────
+void AppBanchetto::update_page4_scatola(void)
+{
+    if (!p4_lbl_avanzamento || s_tagl_idx == 255) return;
+    banchetto_data_t bd;
+    banchetto_manager_get_item(s_tagl_idx, &bd);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lu / %lu", bd.qta_scatola, bd.qta_totale_scatola);
+    lv_label_set_text(p4_lbl_avanzamento, buf);
+}
+
 void AppBanchetto::refresh_page4(tagliatubi_state_t state, const tagliatubi_data_t *data)
 {
     if (!p4_lbl_counter || !p4_lbl_stato) return;
@@ -740,15 +762,20 @@ void AppBanchetto::refresh_page4(tagliatubi_state_t state, const tagliatubi_data
     if (data->lunghezza_misurata > 0)
         snprintf(buf, sizeof(buf), "%ld mm", data->lunghezza_misurata);
     else
-        snprintf(buf, sizeof(buf), "—");
+        buf[0] = '\0';
     lv_label_set_text(p4_lbl_counter, buf);
     lv_label_set_text(p4_lbl_stato, tagl_state_label(state));
     lv_obj_set_style_text_color(p4_lbl_stato, tagl_state_color(state), 0);
+
+    if (state == TAGL_STATE_BOX_FULL)
+        popup_avviso_open(LV_SYMBOL_WARNING " Scatola piena",
+                          "Sostituire la scatola\nquindi riavviare il ciclo.", false);
+
     // Avanzamento fase — aggiornato dopo ogni versa
     if (p4_lbl_avanzamento && s_tagl_idx != 255) {
         banchetto_data_t bd;
         banchetto_manager_get_item(s_tagl_idx, &bd);
-        snprintf(buf, sizeof(buf), "%lu / %lu pz", bd.qta_prod_fase, bd.qta_totale);
+        snprintf(buf, sizeof(buf), "%lu / %lu", bd.qta_scatola, bd.qta_totale_scatola);
         lv_label_set_text(p4_lbl_avanzamento, buf);
     }
 }
@@ -782,6 +809,8 @@ extern "C" void app_banchetto_update_page2(void)
     uint8_t count = banchetto_manager_get_count();
     for (uint8_t i = 0; i < count; i++)
         AppBanchetto::update_page2(i);
+
+    AppBanchetto::update_page4_scatola();
 }
 
 // ─────────────────────────────────────────────────────────
@@ -815,6 +844,7 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
         {
             start = pt;
             pressing = true;
+            ESP_LOGI("SWIPE", "DOWN x=%d y=%d", (int)pt.x, (int)pt.y);
         }
         return;
     }
@@ -825,14 +855,18 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
 
     int32_t dx = pt.x - start.x;
     int32_t dy = pt.y - start.y;
+    int32_t start_x = start.x;
+    int32_t start_y = start.y;
     start = {0, 0};
+    ESP_LOGI("SWIPE", "UP x=%d y=%d  dx=%d dy=%d", (int)pt.x, (int)pt.y, (int)dx, (int)dy);
 
     uint8_t idx = banchetto_manager_get_current_index();
     uint8_t count = banchetto_manager_get_count();
 
     // ── SWIPE ORIZZONTALE — cambia pagina ─────────────────
-    if (abs(dx) > abs(dy) && abs(dx) > 80)
+    if (abs(dx) > abs(dy) && abs(dx) > SWIPE_H_THRESHOLD)
     {
+        if (start_y < 16 || start_y > 160) return; // zona swipe: solo CODICE ARTICOLO
         lv_obj_t *cur = lv_scr_act();
         bool on_page1 = (cur == page1_scr[idx]);
         bool on_page2 = (cur == objects[idx].main);
@@ -902,8 +936,9 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
     }
 
     // ── SWIPE VERTICALE — cambia articolo (stessa pagina) ─
-    if (abs(dy) > abs(dx) && abs(dy) > 80)
+    if (abs(dy) > abs(dx) && abs(dy) > SWIPE_V_THRESHOLD)
     {
+        if (start_x > 260) return; // zona swipe: solo sidebar sinistra
         if (count <= 1)
             return; // un solo articolo, niente da fare
 

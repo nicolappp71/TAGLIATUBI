@@ -608,6 +608,26 @@ bool banchetto_manager_versa(uint32_t qta)
         xSemaphoreGive(data_mutex);
         return false;
     }
+
+    // Macchina manuale (1 ordine): blocca il versamento se la scatola è piena
+    if (s_list.count == 1)
+    {
+        uint32_t qta_reale = qta * cur->qta_pezzi;
+        if (cur->qta_scatola + qta_reale > cur->qta_totale_scatola)
+        {
+            ESP_LOGW(TAG, "Scatola piena (%"PRIu32"/%"PRIu32") — versamento bloccato", cur->qta_scatola, cur->qta_totale_scatola);
+            xSemaphoreGive(data_mutex);
+            if (lvgl_port_lock(pdMS_TO_TICKS(100)))
+            {
+                popup_avviso_open(LV_SYMBOL_WARNING " Contenitore Pieno",
+                                  "Il contenitore e' pieno!\nCambiare il contenitore prima\ndi continuare.",
+                                  !is_online());
+                lvgl_port_unlock();
+            }
+            return false;
+        }
+    }
+
     xSemaphoreGive(data_mutex);
 
     char url[512];
