@@ -47,6 +47,10 @@ static uint8_t s_current_idx = 0;
 static SemaphoreHandle_t data_mutex = NULL;
 static char device_key[17] = {0};
 static banchetto_state_t s_state = BANCHETTO_STATE_CHECKIN;
+static bool s_versa_abilitato = true;  // toggle conteggio pezzi
+
+void banchetto_manager_set_versa_abilitato(bool abilitato) { s_versa_abilitato = abilitato; }
+bool banchetto_manager_get_versa_abilitato(void)           { return s_versa_abilitato; }
 
 // ═══════════════════════════════════════════════════════════
 // UI CALLBACKS E AUDIO
@@ -582,6 +586,10 @@ bool banchetto_manager_get_item(uint8_t index, banchetto_data_t *out_data)
 
 bool banchetto_manager_versa(uint32_t qta)
 {
+    if (!s_versa_abilitato) {
+        ESP_LOGI(TAG, "Versa inibito (toggle OFF)");
+        return true;
+    }
     ESP_LOGI(TAG, "Versa: %lu", qta);
 
     if (!xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))

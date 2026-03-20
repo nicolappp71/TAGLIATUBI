@@ -24,6 +24,7 @@ public:
     static void update_page1(uint8_t idx);
     static void update_page2(uint8_t idx);
     static void update_page4_scatola(void);
+    static void add_versa_switch(lv_obj_t *sidebar);
 
     // Tagliatubi state callback (via lv_async_call)
     static void on_tagl_state_update(void *user_data);

@@ -20,6 +20,25 @@ static const char *TAG = "AppBanchetto";
 #define SWIPE_H_THRESHOLD  80   // orizzontale: cambia pagina
 #define SWIPE_V_THRESHOLD  80   // verticale: cambia articolo
 
+// ─── Toggle versa ─────────────────────────────────────────
+#define VERSA_SW_MAX 4
+static lv_obj_t *s_versa_switches[VERSA_SW_MAX] = {};
+static uint8_t   s_versa_sw_count = 0;
+
+static void versa_switch_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = (lv_obj_t *)lv_event_get_target(e);
+    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    banchetto_manager_set_versa_abilitato(on);
+    // Sincronizza tutti gli altri switch
+    for (uint8_t i = 0; i < s_versa_sw_count; i++) {
+        if (s_versa_switches[i] && s_versa_switches[i] != sw) {
+            if (on) lv_obj_add_state(s_versa_switches[i], LV_STATE_CHECKED);
+            else    lv_obj_clear_state(s_versa_switches[i], LV_STATE_CHECKED);
+        }
+    }
+}
+
 // ─── Variabili statiche — array per articolo ─────────────
 lv_obj_t *AppBanchetto::page1_scr[BANCHETTO_MAX_ITEMS] = {};
 lv_obj_t *AppBanchetto::lbl_matricola[BANCHETTO_MAX_ITEMS] = {};
@@ -268,6 +287,7 @@ void AppBanchetto::crea_page3(uint8_t idx)
     lv_obj_set_style_pad_all(sidebar, 24, 0);
     lv_obj_clear_flag(sidebar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(sidebar, LV_OBJ_FLAG_EVENT_BUBBLE);
+    add_versa_switch(sidebar);
 
     lv_obj_t *lbl_op_tit = lv_label_create(sidebar);
     lv_label_set_text(lbl_op_tit, "OPERATORE");
@@ -581,6 +601,7 @@ void AppBanchetto::crea_page4(uint8_t idx)
     lv_obj_set_style_pad_all(sidebar, 24, 0);
     lv_obj_clear_flag(sidebar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(sidebar, LV_OBJ_FLAG_EVENT_BUBBLE);
+    add_versa_switch(sidebar);
 
     lv_obj_t *ts = lv_label_create(sidebar);
     lv_label_set_text(ts, "STATO");
@@ -744,6 +765,28 @@ void AppBanchetto::crea_page4(uint8_t idx)
 // ─────────────────────────────────────────────────────────
 // REFRESH PAGE 4
 // ─────────────────────────────────────────────────────────
+void AppBanchetto::add_versa_switch(lv_obj_t *sidebar)
+{
+    // Label
+    lv_obj_t *lbl = lv_label_create(sidebar);
+    lv_label_set_text(lbl, "CONTEGGIO");
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_letter_space(lbl, 3, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 220);
+
+    // Switch
+    lv_obj_t *sw = lv_switch_create(sidebar);
+    lv_obj_set_size(sw, 80, 40);
+    lv_obj_align_to(sw, lbl, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    if (banchetto_manager_get_versa_abilitato())
+        lv_obj_add_state(sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(sw, versa_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    if (s_versa_sw_count < VERSA_SW_MAX)
+        s_versa_switches[s_versa_sw_count++] = sw;
+}
+
 void AppBanchetto::update_page4_scatola(void)
 {
     if (!p4_lbl_avanzamento || s_tagl_idx == 255) return;
@@ -811,6 +854,11 @@ extern "C" void app_banchetto_update_page2(void)
         AppBanchetto::update_page2(i);
 
     AppBanchetto::update_page4_scatola();
+}
+
+extern "C" void add_versa_switch_c(lv_obj_t *sidebar)
+{
+    AppBanchetto::add_versa_switch(sidebar);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1000,6 +1048,7 @@ void AppBanchetto::crea_page1(uint8_t idx)
     lv_obj_set_style_pad_all(sidebar, 24, 0);
     lv_obj_clear_flag(sidebar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(sidebar, LV_OBJ_FLAG_EVENT_BUBBLE);
+    add_versa_switch(sidebar);
 
     lv_obj_t *lbl_op_tit = lv_label_create(sidebar);
     lv_label_set_text(lbl_op_tit, "OPERATORE");

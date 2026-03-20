@@ -160,6 +160,8 @@ esp_err_t     banchetto_manager_controllo(const char *badge);
 void          banchetto_manager_set_barcode(const char *barcode);
 bool          banchetto_manager_versa(uint32_t qta);
 bool          banchetto_manager_scarto(uint32_t qta_scarti);
+void          banchetto_manager_set_versa_abilitato(bool abilitato);
+bool          banchetto_manager_get_versa_abilitato(void);
 
 // Formazione
 esp_err_t     banchetto_manager_formazione_formatore(const char *badge);

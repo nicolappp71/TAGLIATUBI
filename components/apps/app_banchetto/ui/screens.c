@@ -11,6 +11,9 @@
 #include "ui.h"
 #include "banchetto_manager.h"
 
+// Forward declaration (implemented in AppBanchetto.cpp)
+void add_versa_switch_c(lv_obj_t *sidebar);
+
 // Definizione array globale
 objects_t objects[BANCHETTO_MAX_ITEMS];
 
@@ -39,6 +42,7 @@ void create_screen_main(uint8_t idx)
         lv_obj_set_style_pad_all(sb, 24, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_clear_flag(sb, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(sb, LV_OBJ_FLAG_EVENT_BUBBLE);
+        add_versa_switch_c(sb);
 
         lv_obj_t *tit = lv_label_create(sb);
         lv_label_set_text(tit, "OPERATORE");
