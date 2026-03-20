@@ -2,7 +2,7 @@
 #define MODE_H
 
 // Decommenta questa riga quando sei a casa, commentala quando sei in ufficio
-#define CASA
+//#define CASA
 
 #ifdef CASA
 #define SERVER_BASE "http://192.168.1.58:10000"

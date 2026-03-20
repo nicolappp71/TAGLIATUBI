@@ -1,5 +1,6 @@
 idf_component_register(
-    SRCS "main.cpp" 
+    SRCS "main.cpp"
+    "tagliatubi_manager.c"
     "wifi_manager.c"
     "web_server.c"
     "settings_manager.c"

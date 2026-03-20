@@ -40,6 +40,7 @@ extern "C"
 #include "ble_manager.h"
 #include "ota_manager.h"
 #include "offline_journal.h"
+#include "tagliatubi_manager.h"
 }
 
 static const char *TAG = "MAIN";
@@ -284,6 +285,7 @@ extern "C" void app_main(void)
     init_rfid_uart();
     key_manager_init();
     banchetto_manager_init();
+    tagliatubi_manager_init();
 
     esp_err_t sd_ret = bsp_sdcard_mount();
     if (sd_ret == ESP_OK)
@@ -386,8 +388,9 @@ extern "C" void app_main(void)
     inizializza_testi_gui();
     banchetto->installApp(new Calculator());
     banchetto->installApp(new MiaApp());
-    banchetto->installApp(new Logged());
+   // banchetto->installApp(new Logged());
     banchetto->installApp(new DocBrowser());
+   // banchetto->installApp(new AppTagliatubi());
 
     if (bsp_extra_player_init() != ESP_OK)
         ESP_LOGE(TAG, "bsp_extra_player_init failed - audio non disponibile");
