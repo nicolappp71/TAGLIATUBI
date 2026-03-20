@@ -813,6 +813,12 @@ void AppBanchetto::refresh_page4(tagliatubi_state_t state, const tagliatubi_data
     if (state == TAGL_STATE_BOX_FULL)
         popup_avviso_open(LV_SYMBOL_WARNING " Scatola piena",
                           "Sostituire la scatola\nquindi riavviare il ciclo.", false);
+    else if (state == TAGL_STATE_ERROR_NO_MATERIAL)
+        popup_avviso_open(LV_SYMBOL_WARNING " Mancanza materiale",
+                          "Controllare la presenza del tubo\ne riavviare.", false);
+    else if (state == TAGL_STATE_ERROR_SAFETY)
+        popup_avviso_open(LV_SYMBOL_WARNING " Sportello aperto",
+                          "Chiudere lo sportello di protezione\nprima di continuare.", false);
 
     // Avanzamento fase — aggiornato dopo ogni versa
     if (p4_lbl_avanzamento && s_tagl_idx != 255) {

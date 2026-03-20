@@ -58,14 +58,24 @@ static void notify(tagliatubi_state_t new_state)
     }
 }
 
+// Sportello chiuso (NC: HIGH=ok, LOW=aperto)
 static inline bool is_safe(void)
 {
+#if TAGL_SAFETY_DEBUG
+    return true;
+#else
     return gpio_get_level(TAGL_MICRO_CARTER_GPIO) == 1;
+#endif
 }
 
+// Presenza materiale (NC: HIGH=ok, LOW=assente)
 static inline bool has_material(void)
 {
+#if TAGL_SAFETY_DEBUG
+    return true;
+#else
     return gpio_get_level(TAGL_MICRO_GPIO) == 1;
+#endif
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +169,11 @@ static void motor_move(uint32_t total_pulses)
     while (remaining > 0) {
         // Safety / abort check
         if (!is_safe()) {
-            ESP_LOGW(TAG, "Motor stopped: carter open");
+            ESP_LOGW(TAG, "Motor stopped: sportello aperto");
+            break;
+        }
+        if (!has_material()) {
+            ESP_LOGW(TAG, "Motor stopped: materiale assente");
             break;
         }
         if (xEventGroupGetBits(s_evg) & EVT_STOP) {
@@ -297,7 +311,13 @@ static void tagliatubi_task(void *arg)
 
         // ── Cut only (no movement) ───────────────────────────────────────────
         if (ev & EVT_TAGLIO) {
-            if (!is_safe() || !has_material()) {
+            if (!is_safe()) {
+                notify(TAGL_STATE_ERROR_SAFETY);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                notify(TAGL_STATE_IDLE);
+                continue;
+            }
+            if (!has_material()) {
                 notify(TAGL_STATE_ERROR_NO_MATERIAL);
                 vTaskDelay(pdMS_TO_TICKS(500));
                 notify(TAGL_STATE_IDLE);
@@ -312,6 +332,12 @@ static void tagliatubi_task(void *arg)
         if (ev & EVT_AVANTI) {
             if (!is_safe()) {
                 notify(TAGL_STATE_ERROR_SAFETY);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                notify(TAGL_STATE_IDLE);
+                continue;
+            }
+            if (!has_material()) {
+                notify(TAGL_STATE_ERROR_NO_MATERIAL);
                 vTaskDelay(pdMS_TO_TICKS(500));
                 notify(TAGL_STATE_IDLE);
                 continue;
@@ -351,8 +377,14 @@ static void tagliatubi_task(void *arg)
             motor_move(nstep * TAGL_LOOP_MULTIPLIER);
             vTaskDelay(pdMS_TO_TICKS(50));   // attendi fine inerzia meccanica
 
-            if (!has_material() || !is_safe()) {
+            if (!has_material()) {
                 notify(TAGL_STATE_ERROR_NO_MATERIAL);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                notify(TAGL_STATE_IDLE);
+                continue;
+            }
+            if (!is_safe()) {
+                notify(TAGL_STATE_ERROR_SAFETY);
                 vTaskDelay(pdMS_TO_TICKS(500));
                 notify(TAGL_STATE_IDLE);
                 continue;
@@ -371,7 +403,6 @@ static void tagliatubi_task(void *arg)
         // ── Full automatic cycle ─────────────────────────────────────────────
         if (ev & EVT_START) {
             notify(TAGL_STATE_RUNNING);
-            bool is_ciclo = true;
 
             while (s_data.prodotti < s_data.quantita) {
 
@@ -382,19 +413,15 @@ static void tagliatubi_task(void *arg)
                     break;
                 }
 
-                // Material check
-                if (!has_material()) {
-                    notify(TAGL_STATE_ERROR_NO_MATERIAL);
-                    is_ciclo = false;
-                    break;
-                }
-
-                // Safety check (only before first piece; then is_ciclo skips it)
-                if (!is_safe() && !is_ciclo) {
+                // Safety checks
+                if (!is_safe()) {
                     notify(TAGL_STATE_ERROR_SAFETY);
                     break;
                 }
-                is_ciclo = true;  // keep bypass active during cycle
+                if (!has_material()) {
+                    notify(TAGL_STATE_ERROR_NO_MATERIAL);
+                    break;
+                }
 
                 // Scatola piena? Sospendi il ciclo prima di avanzare
                 banchetto_data_t bd;
@@ -421,8 +448,12 @@ static void tagliatubi_task(void *arg)
                 }
 
                 // Post-move checks
-                if (!has_material() || !is_safe()) {
+                if (!has_material()) {
                     notify(TAGL_STATE_ERROR_NO_MATERIAL);
+                    break;
+                }
+                if (!is_safe()) {
+                    notify(TAGL_STATE_ERROR_SAFETY);
                     break;
                 }
 

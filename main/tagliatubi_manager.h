@@ -10,6 +10,11 @@ extern "C"
 {
 #endif
 
+// ─── Safety Debug ────────────────────────────────────────────────────────────
+// 1 = debug mode: bypass all safety checks (hardware non necessario)
+// 0 = produzione: hardware reale richiesto
+#define TAGL_SAFETY_DEBUG 0
+
 // ─── GPIO Pin Definitions ────────────────────────────────────────────────────
 #define TAGL_STEP_GPIO 46
 #define TAGL_DIR_GPIO 47
