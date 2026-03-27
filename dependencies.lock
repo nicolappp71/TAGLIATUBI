@@ -36,7 +36,7 @@ dependencies:
   esp_lcd_ek79007:
     dependencies: []
     source:
-      path: C:\Users\nicol\Documents\esp-idf\TAGLIATUBI\components\esp_lcd_ek79007
+      path: C:\Users\npuppo\Documents\IDF-projects\PRODUZIONE\DEF_MULTI_ORDINI\components\esp_lcd_ek79007
       type: local
     version: 1.0.2
   espressif/cmake_utilities:

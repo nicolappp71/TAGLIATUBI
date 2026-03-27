@@ -23,9 +23,9 @@ extern "C"
 #define TAGL_ENC_B_GPIO 50
 #define TAGL_VALVOLA_A_GPIO 51
 #define TAGL_VALVOLA_C_GPIO 52
-#define TAGL_SICUREZZA_GPIO 2
-#define TAGL_MICRO_CARTER_GPIO 3
-#define TAGL_MICRO_GPIO 4
+#define TAGL_SICUREZZA_GPIO 2       // Uomo morto: NO, pull-up, premuto = LOW
+#define TAGL_MICRO_CARTER_GPIO 3    // Carter: NC, pull-up, chiuso = HIGH
+#define TAGL_MICRO_MATERIALE 4      // Materiale: leva NC/NO, pull-up, presente = HIGH
 
 // ─── Motor Constants ─────────────────────────────────────────────────────────
 #define TAGL_STEPS_PER_REV 6400 // steps per motor revolution (32x microstepping)
@@ -52,6 +52,7 @@ extern "C"
         TAGL_STATE_ERROR_SAFETY,
         TAGL_STATE_ERROR_LENGTH,
         TAGL_STATE_BOX_FULL,
+        TAGL_STATE_ERROR_UOMO_MORTO,  // Pulsante sicurezza non premuto all'avvio
     } tagliatubi_state_t;
 
     // ─── Product Data ────────────────────────────────────────────────────────────
@@ -96,11 +97,17 @@ extern "C"
     void tagliatubi_manager_set_velocita(int v);
 
     // Cycle control (must be IDLE to start)
+    // Precondizione start: uomo morto premuto + carter chiuso + materiale presente
     esp_err_t tagliatubi_manager_start_ciclo(void); // full automatic cycle
     esp_err_t tagliatubi_manager_singolo(void);     // one advance + cut
     esp_err_t tagliatubi_manager_avanti(void);      // advance only, no cut
     esp_err_t tagliatubi_manager_taglio(void);      // cut only, no advance
-    esp_err_t tagliatubi_manager_stop(void);        // abort current operation
+    esp_err_t tagliatubi_manager_stop(void);        // abort (sempre attivo, no precondizioni)
+
+    // Safety: stato pin di sicurezza (usabile da UI per indicatori)
+    bool tagliatubi_manager_is_uomo_morto(void);  // GPIO2 NO premuto = true
+    bool tagliatubi_manager_is_carter(void);       // GPIO3 NC chiuso = true
+    bool tagliatubi_manager_is_materiale(void);    // GPIO4 leva materiale presente = true
 
     // Getters
     tagliatubi_state_t tagliatubi_manager_get_state(void);

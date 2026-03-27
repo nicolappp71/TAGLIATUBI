@@ -68,14 +68,34 @@ static inline bool is_safe(void)
 #endif
 }
 
-// Presenza materiale (NC: HIGH=ok, LOW=assente)
+// Presenza materiale - micro a leva NC/NO, pull-up (HIGH=materiale presente)
 static inline bool has_material(void)
 {
 #if TAGL_SAFETY_DEBUG
     return true;
 #else
-    return gpio_get_level(TAGL_MICRO_GPIO) == 1;
+    return gpio_get_level(TAGL_MICRO_MATERIALE) == 1;
 #endif
+}
+
+// Uomo morto - contatto NO, pull-up (LOW=premuto)
+static inline bool is_uomo_morto(void)
+{
+#if TAGL_SAFETY_DEBUG
+    return true;
+#else
+    return gpio_get_level(TAGL_SICUREZZA_GPIO) == 0;
+#endif
+}
+
+// Controlla le precondizioni e restituisce lo stato di errore specifico,
+// oppure TAGL_STATE_IDLE se tutto ok.
+static tagliatubi_state_t check_start(void)
+{
+    if (!is_uomo_morto()) return TAGL_STATE_ERROR_UOMO_MORTO;
+    if (!is_safe())       return TAGL_STATE_ERROR_SAFETY;
+    if (!has_material())  return TAGL_STATE_ERROR_NO_MATERIAL;
+    return TAGL_STATE_IDLE;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,7 +190,7 @@ static void motor_move(uint32_t total_pulses)
         // Safety / abort check
         if (!is_safe()) {
             ESP_LOGW(TAG, "Motor stopped: sportello aperto");
-            break;
+            break;  // il task rileva !is_safe() nel check post-movimento e notifica ERROR_SAFETY
         }
         if (!has_material()) {
             ESP_LOGW(TAG, "Motor stopped: materiale assente");
@@ -344,11 +364,23 @@ static void tagliatubi_task(void *arg)
             }
             pcnt_reset_all();
             motor_move(TAGL_AVANTI_STEPS);
-            vTaskDelay(pdMS_TO_TICKS(50));   // attendi fine inerzia meccanica
+            vTaskDelay(pdMS_TO_TICKS(50));
             {
                 int32_t cnt = pcnt_total();
                 float mm = pcnt_to_mm(cnt);
                 ESP_LOGI(TAG, "[AVANTI] encoder: %d count → %.1f mm", (int)cnt, mm);
+            }
+            if (!is_safe()) {
+                notify(TAGL_STATE_ERROR_SAFETY);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                notify(TAGL_STATE_IDLE);
+                continue;
+            }
+            if (!has_material()) {
+                notify(TAGL_STATE_ERROR_NO_MATERIAL);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                notify(TAGL_STATE_IDLE);
+                continue;
             }
             notify(TAGL_STATE_IDLE);
             continue;
@@ -511,11 +543,11 @@ static esp_err_t gpio_init_hw(void)
     gpio_set_level(TAGL_VALVOLA_C_GPIO,  1);
     gpio_set_level(TAGL_VALVOLA_A_GPIO,  1);
 
-    // Inputs with pull-up: SICUREZZA, MICRO_CARTER, MICRO
+    // Inputs with pull-up: SICUREZZA (uomo morto), MICRO_CARTER, MICRO_MATERIALE
     gpio_config_t in = {
         .pin_bit_mask = (1ULL << TAGL_SICUREZZA_GPIO)      |
                         (1ULL << TAGL_MICRO_CARTER_GPIO)    |
-                        (1ULL << TAGL_MICRO_GPIO),
+                        (1ULL << TAGL_MICRO_MATERIALE),
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -664,6 +696,15 @@ esp_err_t tagliatubi_manager_start_ciclo(void)
 {
     if (s_state != TAGL_STATE_IDLE && s_state != TAGL_STATE_DONE)
         return ESP_ERR_INVALID_STATE;
+    {
+        tagliatubi_state_t err = check_start();
+        if (err != TAGL_STATE_IDLE) {
+            notify(err);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            notify(TAGL_STATE_IDLE);
+            return ESP_ERR_NOT_ALLOWED;
+        }
+    }
     xEventGroupSetBits(s_evg, EVT_START);
     return ESP_OK;
 }
@@ -677,6 +718,15 @@ esp_err_t tagliatubi_manager_stop(void)
 esp_err_t tagliatubi_manager_singolo(void)
 {
     if (s_state != TAGL_STATE_IDLE) return ESP_ERR_INVALID_STATE;
+    {
+        tagliatubi_state_t err = check_start();
+        if (err != TAGL_STATE_IDLE) {
+            notify(err);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            notify(TAGL_STATE_IDLE);
+            return ESP_ERR_NOT_ALLOWED;
+        }
+    }
     xEventGroupSetBits(s_evg, EVT_SINGOLO);
     return ESP_OK;
 }
@@ -684,6 +734,15 @@ esp_err_t tagliatubi_manager_singolo(void)
 esp_err_t tagliatubi_manager_avanti(void)
 {
     if (s_state != TAGL_STATE_IDLE && s_state != TAGL_STATE_BOX_FULL) return ESP_ERR_INVALID_STATE;
+    {
+        tagliatubi_state_t err = check_start();
+        if (err != TAGL_STATE_IDLE) {
+            notify(err);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            notify(TAGL_STATE_IDLE);
+            return ESP_ERR_NOT_ALLOWED;
+        }
+    }
     xEventGroupSetBits(s_evg, EVT_AVANTI);
     return ESP_OK;
 }
@@ -691,6 +750,15 @@ esp_err_t tagliatubi_manager_avanti(void)
 esp_err_t tagliatubi_manager_taglio(void)
 {
     if (s_state != TAGL_STATE_IDLE && s_state != TAGL_STATE_BOX_FULL) return ESP_ERR_INVALID_STATE;
+    {
+        tagliatubi_state_t err = check_start();
+        if (err != TAGL_STATE_IDLE) {
+            notify(err);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            notify(TAGL_STATE_IDLE);
+            return ESP_ERR_NOT_ALLOWED;
+        }
+    }
     xEventGroupSetBits(s_evg, EVT_TAGLIO);
     return ESP_OK;
 }
@@ -699,6 +767,10 @@ tagliatubi_state_t tagliatubi_manager_get_state(void)
 {
     return s_state;
 }
+
+bool tagliatubi_manager_is_uomo_morto(void)  { return is_uomo_morto();   }
+bool tagliatubi_manager_is_carter(void)       { return is_safe();         }
+bool tagliatubi_manager_is_materiale(void)    { return has_material();    }
 
 const tagliatubi_data_t *tagliatubi_manager_get_data(void)
 {

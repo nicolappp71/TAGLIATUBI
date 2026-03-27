@@ -157,7 +157,19 @@ int offline_journal_replay(void)
                 snprintf(url_fixed, 1024, "%s", url_raw);
             }
 #else
-            snprintf(url_fixed, 1024, "%s", url_raw);
+            // Se il journal è stato scritto in modalità CASA, correggi l'host
+            const char *casa_host = "192.168.1.58:10000";
+            const char *prod_host = "intranet.cifarelli.loc";
+            char *pos = strstr(url_raw, casa_host);
+            if (pos)
+            {
+                int prefix_len = pos - url_raw;
+                snprintf(url_fixed, 1024, "%.*s%s%s", prefix_len, url_raw, prod_host, pos + strlen(casa_host));
+            }
+            else
+            {
+                snprintf(url_fixed, 1024, "%s", url_raw);
+            }
 #endif
             int response_code = 0;
             char *body = NULL;

@@ -827,6 +827,8 @@
 #include <string.h>
 #include "audio_manager.h"
 #include "ota_manager.h"
+#include "esp_app_desc.h"
+extern int wifi_get_rssi(void);
 
 static const char *TAG = "WEB_SERVER";
 static httpd_handle_t server = NULL;
@@ -846,7 +848,7 @@ static const char dashboard_html[] =
     "body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;padding:20px}"
     ".container{max-width:800px;margin:0 auto;background:#16213e;border-radius:12px;padding:30px;box-shadow:0 8px 32px rgba(0,0,0,0.3)}"
     "h1{color:#0f3460;margin-bottom:20px;text-align:center;font-size:2em}"
-    ".status{display:flex;align-items:center;gap:10px;margin:15px 0;padding:15px;background:#0f3460;border-radius:8px}"
+    ".status{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:15px 0;padding:15px;background:#0f3460;border-radius:8px}"
     ".badge{display:inline-block;padding:5px 15px;border-radius:20px;font-size:0.9em;font-weight:bold}"
     ".badge.open{background:#2ecc71;color:#fff}"
     ".badge.closed{background:#e74c3c;color:#fff}"
@@ -872,8 +874,13 @@ static const char dashboard_html[] =
     "<div class='container'>"
     "<h1 id='page-title'>Banchetto Live</h1>"
     "<div class='status'>"
+    "<div style='display:flex;align-items:center;gap:10px'>"
     "<div class='status-dot online' id='status-dot'></div>"
     "<span id='connection-status'>Aggiornamento attivo</span>"
+    "</div>"
+    "<div style='text-align:right;font-size:0.85em;color:#aaa'>"
+    "<span id='fw-version'>v-</span>&nbsp;&nbsp;RSSI:&nbsp;<span id='rssi-value'>-</span>&nbsp;dBm"
+    "</div>"
     "</div>"
     "<div class='section'>"
     "<h2>Operatore</h2>"
@@ -970,6 +977,8 @@ static const char dashboard_html[] =
     "if(selectedIdx>=allItems.length)selectedIdx=0;"
     "updateDropdown();"
     "updateDisplay();"
+    "if(d.version)document.getElementById('fw-version').textContent='v'+d.version;"
+    "if(d.rssi!==undefined)document.getElementById('rssi-value').textContent=d.rssi;"
     "}).catch(()=>{"
     "document.getElementById('status-dot').className='status-dot';"
     "});"
@@ -1156,6 +1165,9 @@ static esp_err_t api_data_all_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(item, "qta_totale_giornaliera", data.qta_totale_giornaliera);
         cJSON_AddItemToArray(arr, item);
     }
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    cJSON_AddStringToObject(root, "version", app_desc->version);
+    cJSON_AddNumberToObject(root, "rssi", wifi_get_rssi());
     char *json_str = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json_str)

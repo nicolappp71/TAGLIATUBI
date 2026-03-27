@@ -24,10 +24,19 @@ public:
     static void update_page1(uint8_t idx);
     static void update_page2(uint8_t idx);
     static void update_page4_scatola(void);
-    static void add_versa_switch(lv_obj_t *sidebar);
+    static void add_versa_switch(lv_obj_t *sidebar, int y_offset = 220);
 
     // Tagliatubi state callback (via lv_async_call)
     static void on_tagl_state_update(void *user_data);
+
+    // Accessibili dal timer callback (file scope)
+    static lv_obj_t   *p4_pill_uomo_morto;
+    static lv_obj_t   *p4_lbl_uomo_morto;
+    static lv_obj_t   *p4_pill_materiale;
+    static lv_obj_t   *p4_lbl_materiale;
+    static lv_obj_t   *p4_pill_carter;
+    static lv_obj_t   *p4_lbl_carter;
+    static lv_timer_t *p4_uomo_morto_timer;
 
 private:
     // ── Page 1 ──────────────────────────────────────────────────────────────
@@ -51,10 +60,10 @@ private:
     static lv_obj_t *p3_lbl_pill;
 
     // ── Page 4 — Ciclo tagliatubi (solo banchetto 233) ─────────────────────
-    static lv_obj_t *page4_scr;
-    static lv_obj_t *p4_lbl_counter;
-    static lv_obj_t *p4_lbl_stato;
-    static lv_obj_t *p4_lbl_avanzamento;
+    static lv_obj_t   *page4_scr;
+    static lv_obj_t   *p4_lbl_counter;
+    static lv_obj_t   *p4_lbl_stato;
+    static lv_obj_t   *p4_lbl_avanzamento;
 
     // ── Shared ───────────────────────────────────────────────────────────────
     static lv_obj_t *current_scr;

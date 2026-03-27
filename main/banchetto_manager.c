@@ -338,7 +338,32 @@ esp_err_t banchetto_manager_fetch_from_server(void)
 
     if (xSemaphoreTake(data_mutex, pdMS_TO_TICKS(1000)))
     {
+        // Preserva qta_prod_sessione locale se la sessione è aperta
+        struct { char cod_art[32]; uint32_t qta_sess; bool aperta; } saved[BANCHETTO_MAX_ITEMS];
+        int saved_count = s_list.count;
+        for (int i = 0; i < saved_count; i++)
+        {
+            strncpy(saved[i].cod_art, s_list.items[i].codice_articolo, sizeof(saved[i].cod_art) - 1);
+            saved[i].cod_art[sizeof(saved[i].cod_art) - 1] = '\0';
+            saved[i].qta_sess = s_list.items[i].qta_prod_sessione;
+            saved[i].aperta   = s_list.items[i].sessione_aperta;
+        }
+
         memcpy(&s_list, &temp_list, sizeof(banchetto_list_t));
+
+        for (int i = 0; i < s_list.count; i++)
+        {
+            for (int j = 0; j < saved_count; j++)
+            {
+                if (saved[j].aperta &&
+                    strcmp(s_list.items[i].codice_articolo, saved[j].cod_art) == 0)
+                {
+                    s_list.items[i].qta_prod_sessione = saved[j].qta_sess;
+                    break;
+                }
+            }
+        }
+
         if (s_current_idx >= s_list.count)
             s_current_idx = 0;
         xSemaphoreGive(data_mutex);

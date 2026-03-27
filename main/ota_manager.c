@@ -6,7 +6,9 @@
 
 static const char *TAG = "OTA_MANAGER";
 
-#define OTA_URL "http://192.168.1.58/ota/MULTI_ORDINI_BLE.bin"
+//#define OTA_URL "http://192.168.1.58/ota/MULTI_ORDINI_BLE.bin"
+#define OTA_URL "http://172.18.2.254/ota/MULTI_ORDINI_BLE.bin"
+
 
 /* Flag globale: quando true, gli altri task non fanno chiamate HTTP */
 volatile bool ota_in_progress = false;

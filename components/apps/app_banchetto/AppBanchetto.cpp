@@ -62,9 +62,16 @@ lv_obj_t *AppBanchetto::p3_lbl_lunghezza = nullptr;
 lv_obj_t *AppBanchetto::p3_lbl_quantita = nullptr;
 lv_obj_t *AppBanchetto::p3_lbl_velocita = nullptr;
 lv_obj_t *AppBanchetto::p3_lbl_pill     = nullptr;
-lv_obj_t *AppBanchetto::p4_lbl_counter      = nullptr;
-lv_obj_t *AppBanchetto::p4_lbl_stato        = nullptr;
-lv_obj_t *AppBanchetto::p4_lbl_avanzamento  = nullptr;
+lv_obj_t   *AppBanchetto::p4_lbl_counter      = nullptr;
+lv_obj_t   *AppBanchetto::p4_lbl_stato        = nullptr;
+lv_obj_t   *AppBanchetto::p4_lbl_avanzamento  = nullptr;
+lv_obj_t   *AppBanchetto::p4_pill_uomo_morto  = nullptr;
+lv_obj_t   *AppBanchetto::p4_lbl_uomo_morto   = nullptr;
+lv_obj_t   *AppBanchetto::p4_pill_materiale   = nullptr;
+lv_obj_t   *AppBanchetto::p4_lbl_materiale    = nullptr;
+lv_obj_t   *AppBanchetto::p4_pill_carter      = nullptr;
+lv_obj_t   *AppBanchetto::p4_lbl_carter       = nullptr;
+lv_timer_t *AppBanchetto::p4_uomo_morto_timer = nullptr;
 uint8_t   AppBanchetto::s_tagl_idx      = 255;
 
 // ─── Numpad inline (page3) ───────────────────────────────
@@ -238,11 +245,12 @@ static const char *tagl_state_label(tagliatubi_state_t s)
         case TAGL_STATE_RUNNING:           return "IN CORSO";
         case TAGL_STATE_CUTTING:           return "TAGLIO";
         case TAGL_STATE_DONE:              return "COMPLETATO";
-        case TAGL_STATE_ERROR_NO_MATERIAL: return "NO MATERIALE";
-        case TAGL_STATE_ERROR_SAFETY:      return "SICUREZZA";
-        case TAGL_STATE_ERROR_LENGTH:      return "ERRORE MISURA";
-        case TAGL_STATE_BOX_FULL:          return "SCATOLA PIENA";
-        default:                           return "IDLE";
+        case TAGL_STATE_ERROR_NO_MATERIAL:  return "NO MATERIALE";
+        case TAGL_STATE_ERROR_SAFETY:       return "SPORTELLO APERTO";
+        case TAGL_STATE_ERROR_LENGTH:       return "ERRORE MISURA";
+        case TAGL_STATE_BOX_FULL:           return "SCATOLA PIENA";
+        case TAGL_STATE_ERROR_UOMO_MORTO:   return "SICUREZZA";
+        default:                            return "IDLE";
     }
 }
 static lv_color_t tagl_state_color(tagliatubi_state_t s)
@@ -253,10 +261,49 @@ static lv_color_t tagl_state_color(tagliatubi_state_t s)
         case TAGL_STATE_DONE:              return lv_color_hex(0x00D4FF);
         case TAGL_STATE_ERROR_NO_MATERIAL:
         case TAGL_STATE_ERROR_SAFETY:
-        case TAGL_STATE_ERROR_LENGTH:      return lv_color_hex(0xFF4444);
+        case TAGL_STATE_ERROR_LENGTH:
+        case TAGL_STATE_ERROR_UOMO_MORTO:  return lv_color_hex(0xFF4444);
         case TAGL_STATE_BOX_FULL:          return lv_color_hex(0xFFAA00);
         default:                           return lv_color_hex(0x888888);
     }
+}
+
+// ─────────────────────────────────────────────────────────
+// TIMER — polling pulsante uomo morto (200ms)
+// ─────────────────────────────────────────────────────────
+static void update_pin_pill(lv_obj_t *pill, lv_obj_t *lbl, bool ok)
+{
+    lv_label_set_text(lbl, ok ? LV_SYMBOL_OK " OK" : LV_SYMBOL_CLOSE " NO");
+    lv_obj_set_style_bg_color(pill, ok ? lv_color_hex(0x16A34A) : lv_color_hex(0xE11D48), 0);
+}
+
+static void p4_uomo_morto_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!AppBanchetto::p4_pill_uomo_morto ||
+        !AppBanchetto::p4_pill_materiale  ||
+        !AppBanchetto::p4_pill_carter) {
+        ESP_LOGW("AppBanchetto", "[p4 timer] pill nullptr — cancello timer");
+        lv_timer_del(t);
+        AppBanchetto::p4_uomo_morto_timer = nullptr;
+        return;
+    }
+
+    bool sic = tagliatubi_manager_is_uomo_morto();
+    bool mat = tagliatubi_manager_is_materiale();
+    bool car = tagliatubi_manager_is_carter();
+
+    // Log solo quando cambia stato (evita flood)
+    static bool prev_sic = false, prev_mat = false, prev_car = false;
+    if (sic != prev_sic || mat != prev_mat || car != prev_car) {
+        ESP_LOGI("AppBanchetto", "[pin] SICUREZZA=%s  MATERIALE=%s  CARTER=%s",
+                 sic ? "OK" : "NO", mat ? "OK" : "NO", car ? "OK" : "NO");
+        prev_sic = sic; prev_mat = mat; prev_car = car;
+    }
+
+    update_pin_pill(AppBanchetto::p4_pill_uomo_morto, AppBanchetto::p4_lbl_uomo_morto, sic);
+    update_pin_pill(AppBanchetto::p4_pill_materiale,  AppBanchetto::p4_lbl_materiale,  mat);
+    update_pin_pill(AppBanchetto::p4_pill_carter,     AppBanchetto::p4_lbl_carter,     car);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -573,8 +620,21 @@ void AppBanchetto::update_page3(uint8_t idx)
 // ─────────────────────────────────────────────────────────
 void AppBanchetto::crea_page4(uint8_t idx)
 {
+    ESP_LOGI("AppBanchetto", "[crea_page4] idx=%d", idx);
     banchetto_data_t d;
     banchetto_manager_get_item(idx, &d);
+
+    // Cleanup timer precedente se page4 viene ricreata
+    if (p4_uomo_morto_timer) {
+        lv_timer_del(p4_uomo_morto_timer);
+        p4_uomo_morto_timer = nullptr;
+    }
+    p4_pill_uomo_morto = nullptr;
+    p4_lbl_uomo_morto  = nullptr;
+    p4_pill_materiale  = nullptr;
+    p4_lbl_materiale   = nullptr;
+    p4_pill_carter     = nullptr;
+    p4_lbl_carter      = nullptr;
 
     lv_obj_t *scr = lv_obj_create(NULL);
     page4_scr = scr;
@@ -601,7 +661,7 @@ void AppBanchetto::crea_page4(uint8_t idx)
     lv_obj_set_style_pad_all(sidebar, 24, 0);
     lv_obj_clear_flag(sidebar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(sidebar, LV_OBJ_FLAG_EVENT_BUBBLE);
-    add_versa_switch(sidebar);
+    add_versa_switch(sidebar, 255);   // spostato sotto i 3 indicatori sicurezza
 
     lv_obj_t *ts = lv_label_create(sidebar);
     lv_label_set_text(ts, "STATO");
@@ -629,8 +689,55 @@ void AppBanchetto::crea_page4(uint8_t idx)
     lv_obj_set_style_text_letter_space(p4_lbl_stato, 2, 0);
     lv_obj_align(p4_lbl_stato, LV_ALIGN_CENTER, 0, 0);
 
+    // ── Helper lambda per creare una pill di stato pin ───────────────────────
+    auto make_pin_indicator = [&](const char *titolo, int y_lbl,
+                                  lv_obj_t **out_pill, lv_obj_t **out_lbl) {
+        ESP_LOGI("AppBanchetto", "[p4 pin indicator] crea '%s' y=%d", titolo, y_lbl);
+
+        lv_obj_t *t = lv_label_create(sidebar);
+        lv_label_set_text(t, titolo);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(t, lv_color_hex(0x555555), 0);
+        lv_obj_set_style_text_letter_space(t, 2, 0);
+        lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, y_lbl);
+        lv_obj_add_flag(t, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        lv_obj_t *p = lv_obj_create(sidebar);
+        lv_obj_set_size(p, 150, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(p, lv_color_hex(0xE11D48), 0);
+        lv_obj_set_style_bg_opa(p, 255, 0);
+        lv_obj_set_style_border_width(p, 0, 0);
+        lv_obj_set_style_radius(p, 4, 0);
+        lv_obj_set_style_pad_top(p, 5, 0);    lv_obj_set_style_pad_bottom(p, 5, 0);
+        lv_obj_set_style_pad_left(p, 10, 0);  lv_obj_set_style_pad_right(p, 10, 0);
+        lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(p, LV_ALIGN_TOP_LEFT, 0, y_lbl + 22);
+        lv_obj_add_flag(p, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        lv_obj_t *l = lv_label_create(p);
+        lv_label_set_text(l, LV_SYMBOL_CLOSE " NO");
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+
+        *out_pill = p;
+        *out_lbl  = l;
+        ESP_LOGI("AppBanchetto", "[p4 pin indicator] '%s' pill=%p lbl=%p", titolo, p, l);
+    };
+
+    // SICUREZZA (uomo morto) y=68, MATERIALE y=128, CARTER y=188
+    make_pin_indicator("", 68,  &p4_pill_uomo_morto, &p4_lbl_uomo_morto);
+    make_pin_indicator("MATERIALE", 128, &p4_pill_materiale,  &p4_lbl_materiale);
+    make_pin_indicator("CARTER",    188, &p4_pill_carter,     &p4_lbl_carter);
+    ESP_LOGI("AppBanchetto", "[p4] indicatori pin creati — avvio timer 200ms");
+
+    // Avvia timer polling (200ms) per tutti e 3 i pin
+    if (p4_uomo_morto_timer) { lv_timer_del(p4_uomo_morto_timer); }
+    p4_uomo_morto_timer = lv_timer_create(p4_uomo_morto_timer_cb, 200, nullptr);
+    ESP_LOGI("AppBanchetto", "[p4] timer=%p", p4_uomo_morto_timer);
+
     lv_obj_t *sep = lv_obj_create(sidebar);
-    lv_obj_set_pos(sep, 0, 340);
+    lv_obj_set_pos(sep, 0, 350);
     lv_obj_set_size(sep, SB - 48, 1);
     lv_obj_set_style_bg_color(sep, lv_color_hex(0x333333), 0);
     lv_obj_set_style_bg_opa(sep, 255, 0);
@@ -765,7 +872,7 @@ void AppBanchetto::crea_page4(uint8_t idx)
 // ─────────────────────────────────────────────────────────
 // REFRESH PAGE 4
 // ─────────────────────────────────────────────────────────
-void AppBanchetto::add_versa_switch(lv_obj_t *sidebar)
+void AppBanchetto::add_versa_switch(lv_obj_t *sidebar, int y_offset)
 {
     // Label
     lv_obj_t *lbl = lv_label_create(sidebar);
@@ -773,7 +880,7 @@ void AppBanchetto::add_versa_switch(lv_obj_t *sidebar)
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(0x555555), 0);
     lv_obj_set_style_text_letter_space(lbl, 3, 0);
-    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 220);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, y_offset);
 
     // Switch
     lv_obj_t *sw = lv_switch_create(sidebar);
@@ -815,10 +922,13 @@ void AppBanchetto::refresh_page4(tagliatubi_state_t state, const tagliatubi_data
                           "Sostituire la scatola\nquindi riavviare il ciclo.", false);
     else if (state == TAGL_STATE_ERROR_NO_MATERIAL)
         popup_avviso_open(LV_SYMBOL_WARNING " Mancanza materiale",
-                          "Controllare la presenza del tubo\ne riavviare.", false);
+                          "Controllare presenza materiale\ne riavviare.", false);
     else if (state == TAGL_STATE_ERROR_SAFETY)
         popup_avviso_open(LV_SYMBOL_WARNING " Sportello aperto",
                           "Chiudere lo sportello di protezione\nprima di continuare.", false);
+    else if (state == TAGL_STATE_ERROR_UOMO_MORTO)
+        popup_avviso_open(LV_SYMBOL_WARNING " Sicurezza",
+                          "Tenere premuto il pulsante di sicurezza\nprima di avviare.", false);
 
     // Avanzamento fase — aggiornato dopo ogni versa
     if (p4_lbl_avanzamento && s_tagl_idx != 255) {

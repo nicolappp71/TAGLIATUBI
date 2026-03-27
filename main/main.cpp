@@ -388,7 +388,7 @@ extern "C" void app_main(void)
     inizializza_testi_gui();
     banchetto->installApp(new Calculator());
     banchetto->installApp(new MiaApp());
-   // banchetto->installApp(new Logged());
+    banchetto->installApp(new Logged());
     banchetto->installApp(new DocBrowser());
    // banchetto->installApp(new AppTagliatubi());
 
