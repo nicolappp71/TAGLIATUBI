@@ -21,8 +21,10 @@
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
 #include "esp_app_desc.h" // Necessario per leggere i metadati
+#include "esp_wifi.h"
 extern "C"
 {
+#include "mode.h"
 #include "wifi_manager.h"
 #include "time_manager.h"
 #include "web_server.h"
@@ -250,6 +252,9 @@ void inizializza_testi_gui()
 
 extern "C" void app_main(void)
 {
+#ifdef LOG_QUIET
+    esp_log_level_set("*", ESP_LOG_WARN);
+#endif
     log_manager_init();
 
     esp_err_t err = nvs_flash_init();
@@ -302,15 +307,17 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "Fallimento montaggio SD: %s", esp_err_to_name(sd_ret));
     }
 
+    if (offline_journal_count() > 0)
+    {
+        ESP_LOGI(TAG, "Replay journal offline prima di inizializzare...");
+        offline_journal_replay();
+    }
+
     if (banchetto_manager_fetch_from_server() != ESP_OK)
     {
         ESP_LOGW(TAG, "Fetch server fallito, carico da SD cache...");
         banchetto_manager_load_from_sd();
         banchetto_manager_reconstruct_from_journal();
-    }
-    else
-    {
-        offline_journal_replay();
     }
 
     banchetto_manager_start_periodic_refresh();
@@ -411,6 +418,10 @@ extern "C" void app_main(void)
     ESP_LOGI("APP_INFO", "Compile Time:      %s", app_desc->time);
     ESP_LOGI("APP_INFO", "Compile Date:      %s", app_desc->date);
     ESP_LOGI("APP_INFO", "IDF Version:       %s", app_desc->idf_ver);
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK)
+        ESP_LOGI("APP_INFO", "MAC WiFi STA:      %02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     ESP_LOGI("APP_INFO", "=============================================");
 
     ESP_LOGI(TAG, "Sistema avviato completamente");

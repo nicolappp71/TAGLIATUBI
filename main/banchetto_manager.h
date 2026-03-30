@@ -185,6 +185,7 @@ void          banchetto_manager_print_status(void);
 bool          banchetto_manager_is_ready(void);
 void          banchetto_manager_reset_data(void);
 void          banchetto_manager_reconstruct_from_journal(void);
+bool          banchetto_is_server_reachable(void);
 
 #ifdef __cplusplus
 }

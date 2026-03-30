@@ -29,6 +29,13 @@ static bool is_online(void)
     return (xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT) != 0;
 }
 
+static volatile bool s_server_reachable = true;
+
+bool banchetto_is_server_reachable(void)
+{
+    return s_server_reachable;
+}
+
 extern void app_banchetto_update_page1(void);
 extern void app_banchetto_update_page2(void);
 extern void app_assegna_banchetto_close(void);
@@ -681,8 +688,13 @@ bool banchetto_manager_versa(uint32_t qta)
 
         if (ret != ESP_OK || response_code != 200)
         {
+            s_server_reachable = false;
             ESP_LOGW(TAG, "Errore HTTP versa, fallback a OFFLINE");
             journal_op("versa", s_current_idx, url, (int)qta, NULL, NULL, NULL, NULL);
+        }
+        else
+        {
+            s_server_reachable = true;
         }
     }
 
@@ -784,11 +796,13 @@ bool banchetto_manager_scarto(uint32_t qta_scarti)
         {
             if (response_body)
                 free(response_body);
+            s_server_reachable = false;
             ESP_LOGW(TAG, "Errore HTTP scarto, fallback a OFFLINE");
             journal_op("scarto", s_current_idx, url, (int)qta_scarti, NULL, NULL, NULL, NULL);
         }
         else
         {
+            s_server_reachable = true;
             cJSON *json = cJSON_Parse(response_body);
             free(response_body);
             if (json)

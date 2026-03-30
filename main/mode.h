@@ -4,6 +4,9 @@
 // Decommenta questa riga quando sei a casa, commentala quando sei in ufficio
 //#define CASA
 
+// Decommenta per vedere solo WARNING ed ERROR nel monitor seriale
+//#define LOG_QUIET
+
 #ifdef CASA
 #define SERVER_BASE "http://192.168.1.58:10000"
 #else

@@ -58,6 +58,7 @@ private:
     static lv_obj_t *p3_lbl_quantita;
     static lv_obj_t *p3_lbl_velocita;
     static lv_obj_t *p3_lbl_pill;
+    static lv_obj_t *p3_pill;
 
     // ── Page 4 — Ciclo tagliatubi (solo banchetto 233) ─────────────────────
     static lv_obj_t   *page4_scr;

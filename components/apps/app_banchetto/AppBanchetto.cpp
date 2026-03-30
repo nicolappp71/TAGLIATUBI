@@ -62,6 +62,7 @@ lv_obj_t *AppBanchetto::p3_lbl_lunghezza = nullptr;
 lv_obj_t *AppBanchetto::p3_lbl_quantita = nullptr;
 lv_obj_t *AppBanchetto::p3_lbl_velocita = nullptr;
 lv_obj_t *AppBanchetto::p3_lbl_pill     = nullptr;
+lv_obj_t *AppBanchetto::p3_pill         = nullptr;
 lv_obj_t   *AppBanchetto::p4_lbl_counter      = nullptr;
 lv_obj_t   *AppBanchetto::p4_lbl_stato        = nullptr;
 lv_obj_t   *AppBanchetto::p4_lbl_avanzamento  = nullptr;
@@ -349,7 +350,8 @@ void AppBanchetto::crea_page3(uint8_t idx)
     lv_obj_set_style_text_color(lbl_op_val, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(lbl_op_val, LV_ALIGN_TOP_LEFT, 0, 28);
 
-    lv_obj_t *pill = lv_obj_create(sidebar);
+    p3_pill = lv_obj_create(sidebar);
+    lv_obj_t *pill = p3_pill;
     lv_obj_set_size(pill, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(pill, d.sessione_aperta ? lv_color_hex(0x16A34A) : lv_color_hex(0xE11D48), 0);
     lv_obj_set_style_bg_opa(pill, 255, 0);
@@ -613,6 +615,11 @@ void AppBanchetto::update_page3(uint8_t idx)
     }
     tagliatubi_manager_set_quantita((int32_t)d.qta_totale);
     ESP_LOGI("AppBanchetto", "[DBG page3] banchetto qta_totale=%lu", d.qta_totale);
+
+    if (p3_pill)
+        lv_obj_set_style_bg_color(p3_pill, d.sessione_aperta ? lv_color_hex(0x16A34A) : lv_color_hex(0xE11D48), 0);
+    if (p3_lbl_pill)
+        lv_label_set_text(p3_lbl_pill, d.sessione_aperta ? "LOGGATO " LV_SYMBOL_OK : "NON LOGGATO");
 }
 
 // ─────────────────────────────────────────────────────────
@@ -983,7 +990,7 @@ extern "C" void add_versa_switch_c(lv_obj_t *sidebar)
 void AppBanchetto::offline_timer_cb(lv_timer_t *t)
 {
     if (!offline_banner) return;
-    if (wifi_is_connected())
+    if (wifi_is_connected() && banchetto_is_server_reachable())
         lv_obj_add_flag(offline_banner, LV_OBJ_FLAG_HIDDEN);
     else
         lv_obj_clear_flag(offline_banner, LV_OBJ_FLAG_HIDDEN);
@@ -1648,7 +1655,7 @@ bool AppBanchetto::back(void)
     }
     page3_scr = page4_scr = nullptr;
     p3_lbl_codice = p3_lbl_descr = p3_lbl_lunghezza = nullptr;
-    p3_lbl_quantita = p3_lbl_velocita = p3_lbl_pill = nullptr;
+    p3_lbl_quantita = p3_lbl_velocita = p3_lbl_pill = p3_pill = nullptr;
     p4_lbl_counter = p4_lbl_stato = p4_lbl_avanzamento = nullptr;
     s_tagl_idx = 255;
     notifyCoreClosed();
@@ -1672,7 +1679,7 @@ bool AppBanchetto::close(void)
     }
     page3_scr = page4_scr = nullptr;
     p3_lbl_codice = p3_lbl_descr = p3_lbl_lunghezza = nullptr;
-    p3_lbl_quantita = p3_lbl_velocita = p3_lbl_pill = nullptr;
+    p3_lbl_quantita = p3_lbl_velocita = p3_lbl_pill = p3_pill = nullptr;
     p4_lbl_counter = p4_lbl_stato = p4_lbl_avanzamento = nullptr;
     s_tagl_idx = 255;
     tagliatubi_manager_set_callback(nullptr);

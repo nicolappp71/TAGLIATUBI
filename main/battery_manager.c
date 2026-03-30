@@ -14,10 +14,10 @@ static const char *TAG = "battery";
 
 // ========== CONFIGURAZIONE ==========
 #define BATTERY_ADC_UNIT        ADC_UNIT_1
-#define BATTERY_ADC_CHANNEL     ADC_CHANNEL_6  // GPIO37
+#define BATTERY_ADC_CHANNEL     ADC_CHANNEL_4  // GPIO20 su ESP32-P4
 #define BATTERY_ADC_ATTEN       ADC_ATTEN_DB_12
 
-#define VOLTAGE_DIVIDER_RATIO   1.5f  // Calibrato empiricamente
+#define VOLTAGE_DIVIDER_RATIO   3.0f  // R92=200K / R93=100K → V_BAT = V_ADC * 3
 
 #define BATTERY_VOLTAGE_MAX     4200  // 4.2V
 #define BATTERY_VOLTAGE_MIN     3000  // 3.0V
@@ -37,11 +37,11 @@ static const struct {
     int voltage_mv;
     int percentage;
 } discharge_curve[] = {
-    {4200, 100}, {4150, 95},  {4110, 90},  {4080, 85},
-    {4020, 80},  {3980, 75},  {3950, 70},  {3910, 65},
-    {3870, 60},  {3850, 55},  {3840, 50},  {3820, 45},
-    {3800, 40},  {3790, 35},  {3770, 30},  {3750, 25},
-    {3730, 20},  {3710, 15},  {3690, 10},  {3610, 5},
+    {4200, 100}, {4160, 95},  {4100, 90},  {4050, 85},
+    {4000, 80},  {3960, 75},  {3920, 70},  {3880, 65},
+    {3850, 60},  {3820, 55},  {3800, 50},  {3780, 45},
+    {3760, 40},  {3740, 35},  {3710, 30},  {3680, 25},
+    {3650, 20},  {3620, 15},  {3580, 10},  {3500, 5},
     {3000, 0}
 };
 #define CURVE_POINTS (sizeof(discharge_curve) / sizeof(discharge_curve[0]))

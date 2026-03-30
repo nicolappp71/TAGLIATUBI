@@ -109,7 +109,10 @@ int offline_journal_replay(void)
     char *url_fixed = alloc_line_buffer();
 
     int sent = 0;
+    int current = 0;
     bool failed = false;
+
+    ESP_LOGI(TAG, "Replay journal: %d operazioni da inviare", total);
 
     if (!line || !url_fixed)
     {
@@ -131,12 +134,18 @@ int offline_journal_replay(void)
             continue;
         }
 
+        current++;
         cJSON *j = cJSON_Parse(line);
         if (!j)
         {
+            ESP_LOGW(TAG, "[%d/%d] Riga non valida, mantenuta", current, total);
             fprintf(tmp, "%s", line);
             continue;
         }
+
+        const char *op_preview = cJSON_GetStringValue(cJSON_GetObjectItem(j, "op")) ?: "?";
+        const char *ts_preview = cJSON_GetStringValue(cJSON_GetObjectItem(j, "ts")) ?: "?";
+        ESP_LOGI(TAG, "[%d/%d] Invio: op=%s ts=%s", current, total, op_preview, ts_preview);
 
         const char *url_raw = cJSON_GetStringValue(cJSON_GetObjectItem(j, "url"));
         const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(j, "op"));
@@ -176,9 +185,11 @@ int offline_journal_replay(void)
             if (http_get_request(url_fixed, &response_code, &body) == ESP_OK && response_code == 200)
             {
                 sent++;
+                ESP_LOGI(TAG, "[%d/%d] ✓ Inviato OK", current, total);
             }
             else
             {
+                ESP_LOGW(TAG, "[%d/%d] ✗ Fallito (http=%d), rimane in journal", current, total, response_code);
                 fprintf(tmp, "%s", line);
                 failed = true;
             }
