@@ -1,5 +1,6 @@
 #include "AppBanchetto.hpp"
 #include "esp_log.h"
+#include "esp_lvgl_port.h"
 #include "screens.h"
 #include "fonts.h"
 #include <string.h>
@@ -74,6 +75,25 @@ lv_obj_t   *AppBanchetto::p4_pill_carter      = nullptr;
 lv_obj_t   *AppBanchetto::p4_lbl_carter       = nullptr;
 lv_timer_t *AppBanchetto::p4_uomo_morto_timer = nullptr;
 uint8_t   AppBanchetto::s_tagl_idx      = 255;
+
+// ─── Variabili statiche — pagine collaudo ────────────────
+lv_obj_t *AppBanchetto::page5_scr             = nullptr;
+lv_obj_t *AppBanchetto::s_coll_scan_panel     = nullptr;
+lv_obj_t *AppBanchetto::s_coll_scan_lbl       = nullptr;
+lv_obj_t *AppBanchetto::s_coll_data_panel     = nullptr;
+lv_obj_t *AppBanchetto::s_coll_lbl_operatore  = nullptr;
+lv_obj_t *AppBanchetto::s_coll_lbl_matricola  = nullptr;
+lv_obj_t *AppBanchetto::s_coll_lbl_consumo_ist= nullptr;
+lv_obj_t *AppBanchetto::s_coll_lbl_giri_ist   = nullptr;
+lv_obj_t *AppBanchetto::s_coll_lbl_consumo_min[3]     = {};
+lv_obj_t *AppBanchetto::s_coll_lbl_consumo_ist_col[3] = {};
+lv_obj_t *AppBanchetto::s_coll_lbl_consumo_max[3]     = {};
+lv_obj_t *AppBanchetto::s_coll_lbl_giri_min[3]        = {};
+lv_obj_t *AppBanchetto::s_coll_lbl_giri_ist_col[3]    = {};
+lv_obj_t *AppBanchetto::s_coll_lbl_giri_max[3]        = {};
+lv_obj_t *AppBanchetto::s_coll_btn_fase[3]            = {};
+lv_obj_t *AppBanchetto::s_coll_tbl            = nullptr;
+uint8_t   AppBanchetto::s_coll_idx            = 255;
 
 // ─── Numpad inline (page3) ───────────────────────────────
 struct TNumpadTarget { lv_obj_t *label; const char *title; int max_digits; };
@@ -996,6 +1016,420 @@ void AppBanchetto::offline_timer_cb(lv_timer_t *t)
         lv_obj_clear_flag(offline_banner, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ═════════════════════════════════════════════════════════
+// COLLAUDO — PAGE 5
+// Solo per banchetto COLLAUDI_BANCHETTO_ID "222"
+// Il login operatore avviene su page1 (flusso banchetto normale).
+// Page5 mostra un pannello "scan motore" finché non si scansiona
+// il barcode, poi mostra il pannello dati collaudo.
+// ═════════════════════════════════════════════════════════
+
+// ─── Colori collaudo ─────────────────────────────────────
+#define COLL_CLR_BG         0x1A1A1A
+#define COLL_CLR_HEADER     0x2C2C2C
+#define COLL_CLR_BAND       0x333333
+#define COLL_CLR_COL_BG     0xF5F5F5
+#define COLL_CLR_COL_BORDER 0xCCCCCC
+#define COLL_CLR_VERDE      0x00CC00
+#define COLL_CLR_ROSSO      0xCC0000
+#define COLL_CLR_GIALLO     0xFFE000
+#define COLL_CLR_TESTO_SCURO 0x111111
+
+static const char *COLL_FASE_NOMI[3] = { "CARICO", "MINIMO", "TOP" };
+
+// ─── Helper: band titolo ─────────────────────────────────
+static lv_obj_t *coll_make_band(lv_obj_t *parent, const char *titolo, int y, int w, int h)
+{
+    lv_obj_t *band = lv_obj_create(parent);
+    lv_obj_set_size(band, w, h);
+    lv_obj_set_pos(band, 0, y);
+    lv_obj_set_style_bg_color(band, lv_color_hex(COLL_CLR_BAND), 0);
+    lv_obj_set_style_bg_opa(band, 255, 0);
+    lv_obj_set_style_border_width(band, 0, 0);
+    lv_obj_set_style_radius(band, 0, 0);
+    lv_obj_clear_flag(band, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(band, 0, 0);
+    lv_obj_t *lbl = lv_label_create(band);
+    lv_label_set_text(lbl, titolo);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    return band;
+}
+
+// ─── Helper: box display istantaneo ──────────────────────
+static lv_obj_t *coll_make_display_box(lv_obj_t *parent, int x, int y, int w, int h,
+                                        const char *val, lv_color_t col)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, w, h);
+    lv_obj_set_pos(box, x, y);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(box, 255, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_style_radius(box, 4, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_t *lbl = lv_label_create(box);
+    lv_label_set_text(lbl, val);
+    lv_obj_set_style_text_color(lbl, col, 0);
+    lv_obj_set_style_text_font(lbl, &ui_font_my_font75, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    return lbl;
+}
+
+// ─────────────────────────────────────────────────────────
+// CREA PAGE 5 — Collaudo (scan motore + dati)
+// ─────────────────────────────────────────────────────────
+void AppBanchetto::crea_page5_collaudo(uint8_t idx)
+{
+    int W = 1024, H = 600;
+
+    lv_obj_t *scr = lv_obj_create(NULL);
+    page5_scr = scr;
+    lv_obj_set_style_bg_color(scr, lv_color_hex(COLL_CLR_BG), 0);
+    lv_obj_set_style_bg_opa(scr, 255, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── PANNELLO SCAN MOTORE (visibile finché motore non scansionato) ─────
+    s_coll_scan_panel = lv_obj_create(scr);
+    lv_obj_set_size(s_coll_scan_panel, W, H);
+    lv_obj_set_pos(s_coll_scan_panel, 0, 0);
+    lv_obj_set_style_bg_color(s_coll_scan_panel, lv_color_hex(COLL_CLR_BG), 0);
+    lv_obj_set_style_bg_opa(s_coll_scan_panel, 255, 0);
+    lv_obj_set_style_border_width(s_coll_scan_panel, 0, 0);
+    lv_obj_set_style_pad_all(s_coll_scan_panel, 0, 0);
+    lv_obj_clear_flag(s_coll_scan_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *icon = lv_label_create(s_coll_scan_panel);
+    lv_label_set_text(icon, LV_SYMBOL_LOOP);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(icon, lv_color_hex(0x555555), 0);
+    lv_obj_align(icon, LV_ALIGN_CENTER, 0, -40);
+
+    s_coll_scan_lbl = lv_label_create(s_coll_scan_panel);
+    lv_label_set_text(s_coll_scan_lbl, LV_SYMBOL_WARNING "  Scansiona il barcode del motore");
+    lv_obj_set_style_text_font(s_coll_scan_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_coll_scan_lbl, lv_color_hex(COLL_CLR_GIALLO), 0);
+    lv_obj_align(s_coll_scan_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    // ── PANNELLO DATI (nascosto finché motore non scansionato) ───────────
+    s_coll_data_panel = lv_obj_create(scr);
+    lv_obj_set_size(s_coll_data_panel, W, H);
+    lv_obj_set_pos(s_coll_data_panel, 0, 0);
+    lv_obj_set_style_bg_color(s_coll_data_panel, lv_color_hex(COLL_CLR_BG), 0);
+    lv_obj_set_style_bg_opa(s_coll_data_panel, 255, 0);
+    lv_obj_set_style_border_width(s_coll_data_panel, 0, 0);
+    lv_obj_set_style_pad_all(s_coll_data_panel, 0, 0);
+    lv_obj_clear_flag(s_coll_data_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_coll_data_panel, LV_OBJ_FLAG_HIDDEN);
+
+    int y = 0;
+
+    /* ── HEADER ── */
+    int HDR_H = 52;
+    lv_obj_t *hdr = lv_obj_create(s_coll_data_panel);
+    lv_obj_set_size(hdr, W, HDR_H);
+    lv_obj_set_pos(hdr, 0, y);
+    lv_obj_set_style_bg_color(hdr, lv_color_hex(COLL_CLR_HEADER), 0);
+    lv_obj_set_style_bg_opa(hdr, 255, 0);
+    lv_obj_set_style_border_width(hdr, 0, 0);
+    lv_obj_set_style_radius(hdr, 0, 0);
+    lv_obj_set_style_pad_all(hdr, 0, 0);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Bottone NUOVO MOTORE → torna al pannello scan
+    lv_obj_t *btn_new = lv_btn_create(hdr);
+    lv_obj_set_size(btn_new, 140, 36);
+    lv_obj_align(btn_new, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_set_style_bg_color(btn_new, lv_color_hex(COLL_CLR_GIALLO), 0);
+    lv_obj_set_style_radius(btn_new, 4, 0);
+    lv_obj_set_style_shadow_width(btn_new, 0, 0);
+    lv_obj_add_event_cb(btn_new, [](lv_event_t *e) {
+        collaudo_manager_reset();
+        if (AppBanchetto::s_coll_scan_panel)  lv_obj_clear_flag(AppBanchetto::s_coll_scan_panel, LV_OBJ_FLAG_HIDDEN);
+        if (AppBanchetto::s_coll_data_panel)  lv_obj_add_flag(AppBanchetto::s_coll_data_panel,   LV_OBJ_FLAG_HIDDEN);
+    }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_new = lv_label_create(btn_new);
+    lv_label_set_text(lbl_new, LV_SYMBOL_REFRESH " NUOVO");
+    lv_obj_set_style_text_color(lbl_new, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_font(lbl_new, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_new, LV_ALIGN_CENTER, 0, 0);
+
+    lv_obj_t *centro = lv_obj_create(hdr);
+    lv_obj_set_size(centro, W - 160, HDR_H);
+    lv_obj_align(centro, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_style_bg_opa(centro, 0, 0);
+    lv_obj_set_style_border_width(centro, 0, 0);
+    lv_obj_set_style_pad_all(centro, 0, 0);
+    lv_obj_clear_flag(centro, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl_logo = lv_label_create(centro);
+    lv_label_set_text(lbl_logo, "COLLAUDO MOTORI");
+    lv_obj_set_style_text_font(lbl_logo, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl_logo, lv_color_hex(COLL_CLR_ROSSO), 0);
+    lv_obj_align(lbl_logo, LV_ALIGN_TOP_MID, 0, 2);
+
+    s_coll_lbl_operatore = lv_label_create(centro);
+    lv_label_set_text(s_coll_lbl_operatore, "OPERATORE: ---");
+    lv_obj_set_style_text_font(s_coll_lbl_operatore, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_coll_lbl_operatore, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_coll_lbl_operatore, LV_ALIGN_CENTER, 0, 2);
+
+    s_coll_lbl_matricola = lv_label_create(centro);
+    lv_label_set_text(s_coll_lbl_matricola, "---");
+    lv_obj_set_style_text_font(s_coll_lbl_matricola, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_coll_lbl_matricola, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(s_coll_lbl_matricola, LV_ALIGN_BOTTOM_MID, 0, -2);
+
+    y += HDR_H;
+
+    /* ── BANDA VALORI ISTANTANEI ── */
+    int BAND_H = 22;
+    coll_make_band(s_coll_data_panel, "VALORI ISTANTANEI", y, W, BAND_H);
+    y += BAND_H;
+
+    /* ── DISPLAY ISTANTANEI ── */
+    int DISP_H = 100;
+    int disp_w = (W / 2) - 20;
+
+    lv_obj_t *disp_area = lv_obj_create(s_coll_data_panel);
+    lv_obj_set_size(disp_area, W, DISP_H);
+    lv_obj_set_pos(disp_area, 0, y);
+    lv_obj_set_style_bg_color(disp_area, lv_color_hex(COLL_CLR_BG), 0);
+    lv_obj_set_style_bg_opa(disp_area, 255, 0);
+    lv_obj_set_style_border_width(disp_area, 0, 0);
+    lv_obj_set_style_radius(disp_area, 0, 0);
+    lv_obj_set_style_pad_all(disp_area, 8, 0);
+    lv_obj_clear_flag(disp_area, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl_t1 = lv_label_create(disp_area);
+    lv_label_set_text(lbl_t1, "CONSUMO [kg/h]");
+    lv_obj_set_style_text_color(lbl_t1, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl_t1, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(lbl_t1, 10, 2);
+
+    lv_obj_t *lbl_t2 = lv_label_create(disp_area);
+    lv_label_set_text(lbl_t2, "GIRI [rpm/min]");
+    lv_obj_set_style_text_color(lbl_t2, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl_t2, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(lbl_t2, W / 2 + 10, 2);
+
+    s_coll_lbl_consumo_ist = coll_make_display_box(disp_area, 10, 18, disp_w, 72,
+                                                    "0.000", lv_color_hex(COLL_CLR_VERDE));
+    s_coll_lbl_giri_ist    = coll_make_display_box(disp_area, W / 2 + 10, 18, disp_w, 72,
+                                                    "0000", lv_color_hex(COLL_CLR_ROSSO));
+    y += DISP_H + 4;
+
+    /* ── 3 COLONNE: CARICO / MINIMO / TOP ── */
+    int COL_AREA_H = 180;
+    int col_w = (W - 6) / 3;
+
+    for (int col_idx = 0; col_idx < 3; col_idx++) {
+        int cx = col_idx * (col_w + 3);
+        int cw = col_w;
+        int ch = COL_AREA_H;
+
+        lv_obj_t *col = lv_obj_create(s_coll_data_panel);
+        lv_obj_set_size(col, cw, ch);
+        lv_obj_set_pos(col, cx, y);
+        lv_obj_set_style_bg_color(col, lv_color_hex(COLL_CLR_COL_BG), 0);
+        lv_obj_set_style_bg_opa(col, 255, 0);
+        lv_obj_set_style_border_color(col, lv_color_hex(COLL_CLR_COL_BORDER), 0);
+        lv_obj_set_style_border_width(col, 1, 0);
+        lv_obj_set_style_radius(col, 0, 0);
+        lv_obj_set_style_pad_all(col, 6, 0);
+        lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+        int row_h = 22;
+        int ry = 0;
+
+        lv_obj_t *h1 = lv_label_create(col);
+        lv_label_set_text(h1, "CONSUMO [kg/h]");
+        lv_obj_set_style_text_font(h1, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(h1, lv_color_hex(COLL_CLR_TESTO_SCURO), 0);
+        lv_obj_set_pos(h1, 0, ry);
+
+        lv_obj_t *h2 = lv_label_create(col);
+        lv_label_set_text(h2, "GIRI [rpm/min]");
+        lv_obj_set_style_text_font(h2, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(h2, lv_color_hex(COLL_CLR_TESTO_SCURO), 0);
+        lv_obj_set_pos(h2, (cw - 12) / 2, ry);
+        ry += row_h;
+
+        lv_obj_t *sep2 = lv_obj_create(col);
+        lv_obj_set_size(sep2, cw - 12, 1);
+        lv_obj_set_pos(sep2, 0, ry);
+        lv_obj_set_style_bg_color(sep2, lv_color_hex(COLL_CLR_COL_BORDER), 0);
+        lv_obj_set_style_bg_opa(sep2, 255, 0);
+        lv_obj_set_style_border_width(sep2, 0, 0);
+        ry += 4;
+
+        const char *row_labels[3] = { "MIN", "ISTANTANEO", "MAX" };
+        lv_obj_t **out_c[3] = {
+            &s_coll_lbl_consumo_min[col_idx],
+            &s_coll_lbl_consumo_ist_col[col_idx],
+            &s_coll_lbl_consumo_max[col_idx]
+        };
+        lv_obj_t **out_g[3] = {
+            &s_coll_lbl_giri_min[col_idx],
+            &s_coll_lbl_giri_ist_col[col_idx],
+            &s_coll_lbl_giri_max[col_idx]
+        };
+
+        for (int r = 0; r < 3; r++) {
+            lv_obj_t *rl = lv_label_create(col);
+            lv_label_set_text(rl, row_labels[r]);
+            lv_obj_set_style_text_font(rl, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(rl, lv_color_hex(COLL_CLR_TESTO_SCURO), 0);
+            lv_obj_set_width(rl, cw - 12);
+            lv_obj_set_style_text_align(rl, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_pos(rl, 0, ry);
+            ry += row_h - 4;
+
+            lv_obj_t *lc = lv_label_create(col);
+            lv_label_set_text(lc, "---");
+            lv_obj_set_style_text_font(lc, &lv_font_montserrat_16, 0);
+            lv_obj_set_style_text_color(lc,
+                r == 1 ? lv_color_hex(COLL_CLR_VERDE) : lv_color_hex(COLL_CLR_TESTO_SCURO), 0);
+            lv_obj_set_pos(lc, 0, ry);
+            *out_c[r] = lc;
+
+            lv_obj_t *lg = lv_label_create(col);
+            lv_label_set_text(lg, "----");
+            lv_obj_set_style_text_font(lg, &lv_font_montserrat_16, 0);
+            lv_obj_set_style_text_color(lg,
+                r == 1 ? lv_color_hex(COLL_CLR_ROSSO) : lv_color_hex(COLL_CLR_TESTO_SCURO), 0);
+            lv_obj_set_pos(lg, (cw - 12) / 2, ry);
+            *out_g[r] = lg;
+
+            ry += row_h + 2;
+        }
+
+        lv_obj_t *btn = lv_btn_create(col);
+        lv_obj_set_size(btn, cw - 12, 36);
+        lv_obj_set_pos(btn, 0, ch - 12 - 36 - 6);
+        lv_obj_set_style_bg_color(btn,
+            col_idx == 2 ? lv_color_hex(COLL_CLR_GIALLO) : lv_color_hex(0xDDDDDD), 0);
+        lv_obj_set_style_radius(btn, 4, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
+        // TODO: collegare callback fase
+        lv_obj_t *btn_lbl2 = lv_label_create(btn);
+        lv_label_set_text(btn_lbl2, COLL_FASE_NOMI[col_idx]);
+        lv_obj_set_style_text_font(btn_lbl2, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(btn_lbl2, lv_color_hex(COLL_CLR_TESTO_SCURO), 0);
+        lv_obj_align(btn_lbl2, LV_ALIGN_CENTER, 0, 0);
+        s_coll_btn_fase[col_idx] = btn;
+    }
+    y += COL_AREA_H + 4;
+
+    /* ── TABELLA ULTIMI COLLAUDI ── */
+    coll_make_band(s_coll_data_panel, "ULTIMI COLLAUDI", y, W, BAND_H);
+    y += BAND_H;
+
+    s_coll_tbl = lv_table_create(s_coll_data_panel);
+    lv_obj_set_size(s_coll_tbl, W, H - y);
+    lv_obj_set_pos(s_coll_tbl, 0, y);
+    lv_obj_set_style_bg_color(s_coll_tbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(s_coll_tbl, 255, 0);
+    lv_table_set_col_cnt(s_coll_tbl, 4);
+    lv_table_set_col_width(s_coll_tbl, 0, W / 4);
+    lv_table_set_col_width(s_coll_tbl, 1, W / 4);
+    lv_table_set_col_width(s_coll_tbl, 2, W / 4);
+    lv_table_set_col_width(s_coll_tbl, 3, W / 4);
+    lv_table_set_cell_value(s_coll_tbl, 0, 0, "MATRICOLA");
+    lv_table_set_cell_value(s_coll_tbl, 0, 1, "CONSUMO");
+    lv_table_set_cell_value(s_coll_tbl, 0, 2, "GIRI");
+    lv_table_set_cell_value(s_coll_tbl, 0, 3, "ESITO");
+
+    ESP_LOGI(TAG, "Collaudo page5 built for banchetto %s (idx %d)", COLLAUDI_BANCHETTO_ID, idx);
+}
+
+// ─────────────────────────────────────────────────────────
+// UPDATE dopo motore OK → mostra pannello dati
+// ─────────────────────────────────────────────────────────
+void AppBanchetto::update_collaudo_badge_ok(void)
+{
+    // Non usato: il badge viene già gestito dal flusso banchetto su page1
+}
+
+void AppBanchetto::update_collaudo_motore_ok(void)
+{
+    collaudo_motore_t    mot;
+    collaudo_manager_get_motore(&mot);
+
+    // Prendi operatore dal banchetto già loggato
+    banchetto_data_t d;
+    banchetto_manager_get_item(s_coll_idx, &d);
+
+    if (s_coll_lbl_operatore)
+        lv_label_set_text_fmt(s_coll_lbl_operatore, "OPERATORE: %s", d.operatore);
+    if (s_coll_lbl_matricola)
+        lv_label_set_text_fmt(s_coll_lbl_matricola, "%s — MAT: %s", mot.descrizione, mot.matricola);
+
+    // Popola i limiti nelle 3 colonne
+    float cmin[3] = { mot.carico_consumo_min, mot.minimo_consumo_min, mot.top_consumo_min };
+    float cmax[3] = { mot.carico_consumo_max, mot.minimo_consumo_max, mot.top_consumo_max };
+    float gmin[3] = { mot.carico_giri_min,    mot.minimo_giri_min,    mot.top_giri_min    };
+    float gmax[3] = { mot.carico_giri_max,    mot.minimo_giri_max,    mot.top_giri_max    };
+    for (int i = 0; i < 3; i++) {
+        if (s_coll_lbl_consumo_min[i]) lv_label_set_text_fmt(s_coll_lbl_consumo_min[i], "%.2f", cmin[i]);
+        if (s_coll_lbl_consumo_max[i]) lv_label_set_text_fmt(s_coll_lbl_consumo_max[i], "%.2f", cmax[i]);
+        if (s_coll_lbl_giri_min[i])    lv_label_set_text_fmt(s_coll_lbl_giri_min[i],    "%.0f", gmin[i]);
+        if (s_coll_lbl_giri_max[i])    lv_label_set_text_fmt(s_coll_lbl_giri_max[i],    "%.0f", gmax[i]);
+    }
+
+    // Mostra pannello dati, nascondi pannello scan
+    if (s_coll_scan_panel) lv_obj_add_flag(s_coll_scan_panel,  LV_OBJ_FLAG_HIDDEN);
+    if (s_coll_data_panel) lv_obj_clear_flag(s_coll_data_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ─── Callbacks FreeRTOS → LVGL ───────────────────────────
+extern "C" void collaudo_app_on_badge_ok(void)
+{
+    // Non usato in questo progetto (badge gestito su page1)
+}
+
+extern "C" void collaudo_app_on_motore_ok(void)
+{
+    if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+        AppBanchetto::update_collaudo_motore_ok();
+        lvgl_port_unlock();
+    }
+}
+
+extern "C" void collaudo_app_on_error(const char *msg)
+{
+    if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+        lv_obj_t *box = lv_obj_create(lv_scr_act());
+        lv_obj_set_size(box, 400, 160);
+        lv_obj_align(box, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_bg_color(box, lv_color_hex(0x2A0000), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(COLL_CLR_ROSSO), 0);
+        lv_obj_set_style_border_width(box, 2, 0);
+        lv_obj_set_style_radius(box, 8, 0);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *lbl = lv_label_create(box);
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_CLOSE "  Errore\n%s", msg);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(COLL_CLR_ROSSO), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -12);
+        lv_obj_t *btn = lv_btn_create(box);
+        lv_obj_set_size(btn, 100, 36);
+        lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -8);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(COLL_CLR_ROSSO), 0);
+        lv_obj_add_event_cb(btn, [](lv_event_t *e) {
+            lv_obj_del(lv_obj_get_parent(lv_event_get_target(e)));
+        }, LV_EVENT_CLICKED, nullptr);
+        lv_obj_t *btn_lbl = lv_label_create(btn);
+        lv_label_set_text(btn_lbl, "OK");
+        lv_obj_align(btn_lbl, LV_ALIGN_CENTER, 0, 0);
+        lvgl_port_unlock();
+    }
+}
+
 // ─────────────────────────────────────────────────────────
 // SWIPE CALLBACK
 // ─────────────────────────────────────────────────────────
@@ -1043,6 +1477,7 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
         bool on_page2 = (cur == objects[idx].main);
         bool on_page3 = (page3_scr && cur == page3_scr);
         bool on_page4 = (page4_scr && cur == page4_scr);
+        bool on_page5 = (page5_scr && cur == page5_scr);
 
         if (dx < 0)
         {
@@ -1074,6 +1509,17 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
                     current_scr = page3_scr;
                 }
             }
+            else if (on_page2 && page5_scr)
+            {
+                // page2 → page5 (solo banchetto 222)
+                banchetto_data_t d;
+                banchetto_manager_get_item(idx, &d);
+                if (strcmp(d.banchetto, COLLAUDI_BANCHETTO_ID) == 0)
+                {
+                    lv_scr_load_anim(page5_scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+                    current_scr = page5_scr;
+                }
+            }
             else if (on_page3 && page4_scr)
             {
                 // page3 → page4
@@ -1101,6 +1547,12 @@ void AppBanchetto::swipe_event_cb(lv_event_t *e)
                 // page4 → page3
                 lv_scr_load_anim(page3_scr, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
                 current_scr = page3_scr;
+            }
+            else if (on_page5)
+            {
+                // page5 → page2 (banchetto 222)
+                lv_scr_load_anim(objects[s_coll_idx].main, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+                current_scr = objects[s_coll_idx].main;
             }
         }
         return;
@@ -1575,6 +2027,20 @@ bool AppBanchetto::run(void)
             lv_obj_add_event_cb(page4_scr, swipe_event_cb, LV_EVENT_PRESSING, NULL);
             lv_obj_add_event_cb(page4_scr, swipe_event_cb, LV_EVENT_RELEASED, NULL);
             ESP_LOGI(TAG, "Tagliatubi pages built for banchetto %s (idx %d)", TAGL_BANCHETTO_ID, i);
+            break;
+        }
+    }
+
+    // Costruisce page5 se esiste il banchetto 222
+    for (uint8_t i = 0; i < count; i++) {
+        banchetto_data_t d;
+        banchetto_manager_get_item(i, &d);
+        if (strcmp(d.banchetto, COLLAUDI_BANCHETTO_ID) == 0) {
+            s_coll_idx = i;
+            crea_page5_collaudo(i);
+            lv_obj_add_event_cb(page5_scr, swipe_event_cb, LV_EVENT_PRESSING, NULL);
+            lv_obj_add_event_cb(page5_scr, swipe_event_cb, LV_EVENT_RELEASED, NULL);
+            ESP_LOGI(TAG, "Collaudo page built for banchetto %s (idx %d)", COLLAUDI_BANCHETTO_ID, i);
             break;
         }
     }

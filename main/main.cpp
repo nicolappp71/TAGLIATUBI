@@ -43,6 +43,7 @@ extern "C"
 #include "ota_manager.h"
 #include "offline_journal.h"
 #include "tagliatubi_manager.h"
+#include "collaudo_manager.h"
 }
 
 static const char *TAG = "MAIN";
@@ -291,6 +292,7 @@ extern "C" void app_main(void)
     key_manager_init();
     banchetto_manager_init();
     tagliatubi_manager_init();
+    collaudo_manager_init();
 
     esp_err_t sd_ret = bsp_sdcard_mount();
     if (sd_ret == ESP_OK)

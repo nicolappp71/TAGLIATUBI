@@ -5,10 +5,14 @@
 
 extern "C" {
 #include "tagliatubi_manager.h"
+#include "collaudo_manager.h"
 }
 
 // Codice banchetto che ha le pagine tagliatubi extra
-#define TAGL_BANCHETTO_ID  "233"
+#define TAGL_BANCHETTO_ID     "233"
+
+// Codice banchetto che ha le pagine collaudo extra
+#define COLLAUDI_BANCHETTO_ID "222"
 
 class AppBanchetto : public ESP_Brookesia_PhoneApp
 {
@@ -25,6 +29,8 @@ public:
     static void update_page2(uint8_t idx);
     static void update_page4_scatola(void);
     static void add_versa_switch(lv_obj_t *sidebar, int y_offset = 220);
+    static void update_collaudo_badge_ok(void);
+    static void update_collaudo_motore_ok(void);
 
     // Tagliatubi state callback (via lv_async_call)
     static void on_tagl_state_update(void *user_data);
@@ -66,11 +72,32 @@ private:
     static lv_obj_t   *p4_lbl_stato;
     static lv_obj_t   *p4_lbl_avanzamento;
 
+    // ── Page 5 — Collaudo (solo banchetto 222) ─────────────────────────────
+    // Pannello scan (visibile finché motore non scansionato)
+    static lv_obj_t *page5_scr;
+    static lv_obj_t *s_coll_scan_panel;
+    static lv_obj_t *s_coll_scan_lbl;
+    // Pannello dati (visibile dopo scan motore)
+    static lv_obj_t *s_coll_data_panel;
+    static lv_obj_t *s_coll_lbl_operatore;
+    static lv_obj_t *s_coll_lbl_matricola;
+    static lv_obj_t *s_coll_lbl_consumo_ist;
+    static lv_obj_t *s_coll_lbl_giri_ist;
+    static lv_obj_t *s_coll_lbl_consumo_min[3];
+    static lv_obj_t *s_coll_lbl_consumo_ist_col[3];
+    static lv_obj_t *s_coll_lbl_consumo_max[3];
+    static lv_obj_t *s_coll_lbl_giri_min[3];
+    static lv_obj_t *s_coll_lbl_giri_ist_col[3];
+    static lv_obj_t *s_coll_lbl_giri_max[3];
+    static lv_obj_t *s_coll_btn_fase[3];
+    static lv_obj_t *s_coll_tbl;
+
     // ── Shared ───────────────────────────────────────────────────────────────
     static lv_obj_t *current_scr;
     static lv_obj_t *offline_banner;
     static lv_timer_t *offline_timer;
     static uint8_t    s_tagl_idx;   // indice del banchetto 233
+    static uint8_t    s_coll_idx;   // indice del banchetto 222
 
     // ── Methods ──────────────────────────────────────────────────────────────
     static void crea_page1(uint8_t idx);
@@ -78,6 +105,7 @@ private:
     static void crea_page4(uint8_t idx);
     static void update_page3(uint8_t idx);
     static void refresh_page4(tagliatubi_state_t state, const tagliatubi_data_t *data);
+    static void crea_page5_collaudo(uint8_t idx);
     static void swipe_event_cb(lv_event_t *e);
     static void offline_timer_cb(lv_timer_t *t);
 
